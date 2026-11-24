@@ -1,0 +1,6 @@
+{
+  "name": "Coimbatore Bus Simulator 3D - Kovai Mass City Drive",
+  "description": "Drive iconic Coimbatore private buses through vibrant Kovai city routes like Gandhipuram, Ukkadam, and Avinashi Road with musical air horns, realistic bus physics, and passenger stops.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
