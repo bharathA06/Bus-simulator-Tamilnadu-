@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#064e3b" />
+      <stop offset="55%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#09090b" />
+    </linearGradient>
+    <linearGradient id="accent" x1="96" y1="112" x2="416" y2="392" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#f59e0b" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="url(#bg)" />
+  <rect x="20" y="20" width="472" height="472" rx="92" stroke="#10b981" stroke-opacity="0.35" stroke-width="6" />
+  <!-- Bus Chassis -->
+  <rect x="116" y="106" width="280" height="256" rx="34" fill="#059669" stroke="#facc15" stroke-width="10" />
+  <!-- Roof AC Unit -->
+  <rect x="176" y="84" width="160" height="28" rx="10" fill="#e2e8f0" />
+  <!-- LED Destination Board -->
+  <rect x="150" y="124" width="212" height="32" rx="8" fill="#09090b" stroke="#334155" stroke-width="3" />
+  <rect x="168" y="135" width="176" height="10" rx="4" fill="#f59e0b" />
+  <!-- Panoramic Windshield -->
+  <rect x="138" y="168" width="236" height="92" rx="14" fill="#0284c7" stroke="#bae6fd" stroke-width="4" />
+  <path d="M150 246 L216 178 L244 178 L178 246 Z" fill="#ffffff" fill-opacity="0.22" />
+  <!-- Front Grille & Emblem -->
+  <rect x="196" y="282" width="120" height="28" rx="6" fill="#09090b" />
+  <rect x="218" y="289" width="76" height="14" rx="4" fill="url(#accent)" />
+  <!-- Dual Headlights -->
+  <circle cx="158" cy="296" r="16" fill="#fef08a" stroke="#f59e0b" stroke-width="4" />
+  <circle cx="354" cy="296" r="16" fill="#fef08a" stroke="#f59e0b" stroke-width="4" />
+  <!-- Front Bumper & TN Plate -->
+  <rect x="108" y="330" width="296" height="34" rx="10" fill="#18181b" stroke="#64748b" stroke-width="3" />
+  <rect x="214" y="337" width="84" height="20" rx="4" fill="#facc15" />
+  <!-- Tires -->
+  <rect x="134" y="362" width="46" height="38" rx="10" fill="#09090b" stroke="#475569" stroke-width="4" />
+  <rect x="332" y="362" width="46" height="38" rx="10" fill="#09090b" stroke="#475569" stroke-width="4" />
+  <!-- Highway Strip -->
+  <rect x="86" y="416" width="340" height="10" rx="5" fill="#facc15" fill-opacity="0.85" />
+</svg>

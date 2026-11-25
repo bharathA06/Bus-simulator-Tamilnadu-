@@ -1,4 +1,4 @@
-import { ROAD_NETWORK, BusStop } from './constants';
+import { ROAD_NETWORK, CURVED_ROADS, BusStop } from './constants';
 
 export type SignalLight = 'green' | 'amber' | 'red';
 export type ManeuverType = 'straight' | 'left' | 'right' | 'uturn' | 'arrive';
@@ -42,29 +42,101 @@ export interface IntersectionSignalState {
 }
 
 export const ROAD_NAMES_VERTICAL: Record<number, string> = {
-  [-240]: 'Nilgiri Ghat & Pollachi Hwy (NH-181)',
-  [-80]: 'Coimbatore – Salem NH-544',
-  [80]: 'Erode – Trichy – Madurai Hwy',
-  [240]: 'Chennai ECR – Rameswaram Trunk',
+  [-480]: 'Ooty – Pollachi – Valparai Western Ghats Hwy',
+  [-240]: 'Coimbatore – Salem – Palani NH-544',
+  [0]: 'Erode – Dindigul – Tirunelveli Central NH-44',
+  [240]: 'Trichy – Madurai Heritage Corridor NH-38',
+  [480]: 'Chennai CMBT – ECR – Rameswaram Trunk Hwy',
 };
 
 export const ROAD_NAMES_HORIZONTAL: Record<number, string> = {
-  [-280]: 'Northern Express NH-48 (Chennai–Salem–Ooty)',
-  [-100]: 'Kongu Industrial Corridor (MTP–Kovai–Erode)',
-  [100]: 'Cauvery – Madurai Heritage Hwy',
-  [280]: 'Southern Coastal Hwy (Pollachi–Kanyakumari)',
+  [-520]: 'Northern Express NH-48 (Ooty–Salem–Chennai)',
+  [-260]: 'MTP – Tiruppur – Trichy Industrial Corridor',
+  [0]: 'Singanallur – Cauvery Delta Cross Hwy',
+  [260]: 'Anaimalai – Kodaikanal – Madurai Hwy',
+  [520]: 'Valparai – Tirunelveli – Kanyakumari Coastal Hwy',
 };
 
-export function getZoneSpeedLimit(x: number, z: number): number {
-  if (x < -190 && z < -115) return 45; // Nilgiri Mountain Ghat speed limit
-  if (
-    (Math.abs(x - -80) < 35 && Math.abs(z - -155) < 40) || // Gandhipuram
-    (Math.abs(x - 240) < 45 && Math.abs(z - -225) < 45) || // Chennai CMBT
-    (Math.abs(x - 80) < 45 && Math.abs(z - 220) < 45) || // Madurai Periyar
-    (Math.abs(x - 80) < 40 && Math.abs(z - 45) < 35) // Trichy Central
-  ) {
-    return 60; // Urban Terminal zone
+function distanceToSegmentSq(
+  px: number,
+  pz: number,
+  ax: number,
+  az: number,
+  bx: number,
+  bz: number
+): { distSq: number; dirX: number; dirZ: number } {
+  const vx = bx - ax;
+  const vz = bz - az;
+  const lenSq = vx * vx + vz * vz;
+  if (lenSq < 0.001) return { distSq: (px - ax) ** 2 + (pz - az) ** 2, dirX: 0, dirZ: 1 };
+  const t = Math.max(0, Math.min(1, ((px - ax) * vx + (pz - az) * vz) / lenSq));
+  const cx = ax + t * vx;
+  const cz = az + t * vz;
+  const len = Math.sqrt(lenSq);
+  return { distSq: (px - cx) ** 2 + (pz - cz) ** 2, dirX: vx / len, dirZ: vz / len };
+}
+
+export function getCurvedRoadAt(
+  x: number,
+  z: number,
+  maxRadius: number = 11
+): { roadName: string; speedLimitKmh: number; dirX: number; dirZ: number; signedOffset: number } | null {
+  let bestDistSq = maxRadius * maxRadius;
+  let match: { roadName: string; speedLimitKmh: number; dirX: number; dirZ: number; signedOffset: number } | null = null;
+
+  for (const cr of CURVED_ROADS) {
+    for (let i = 0; i < cr.points.length - 1; i++) {
+      const a = cr.points[i];
+      const b = cr.points[i + 1];
+      const res = distanceToSegmentSq(x, z, a.x, a.z, b.x, b.z);
+      if (res.distSq < bestDistSq) {
+        bestDistSq = res.distSq;
+        const dx = x - a.x;
+        const dz = z - a.z;
+        // Cross product with forward segment vector (dirX, dirZ) gives lateral side
+        const signedOffset = dx * res.dirZ - dz * res.dirX;
+        match = {
+          roadName: cr.name,
+          speedLimitKmh: cr.speedLimitKmh,
+          dirX: res.dirX,
+          dirZ: res.dirZ,
+          signedOffset,
+        };
+      }
+    }
   }
+  return match;
+}
+
+export function getZoneSpeedLimit(x: number, z: number): number {
+  const curved = getCurvedRoadAt(x, z, 14);
+  if (curved) return curved.speedLimitKmh; // 38-42 km/h mountain hairpins
+
+  if ((x < -270 && z < -270) || (x < -460 && z > 250)) {
+    return 45; // Nilgiri (Ooty/Coonoor) & Valparai Mountain Hill Zone
+  }
+
+  // Urban bus terminus zones (Coimbatore, Chennai CMBT, Madurai, Trichy, Salem, Erode, Tiruppur, Tirunelveli)
+  const urbanHubs: Array<[number, number, number]> = [
+    [-240, -165, 45], // Coimbatore Gandhipuram
+    [-240, 65, 45], // Coimbatore Ukkadam
+    [-140, 0, 38], // Coimbatore Singanallur
+    [-75, -260, 40], // Tiruppur
+    [0, -165, 42], // Erode
+    [-240, -425, 45], // Salem
+    [240, -165, 45], // Trichy
+    [0, 115, 38], // Dindigul
+    [115, 260, 48], // Madurai Mattuthavani
+    [240, 335, 45], // Madurai Periyar
+    [480, -440, 55], // Chennai CMBT
+    [480, -335, 42], // Chennai Tambaram
+    [0, 455, 42], // Tirunelveli
+    [165, 520, 42], // Kanyakumari
+  ];
+  for (const [hx, hz, r] of urbanHubs) {
+    if (Math.hypot(x - hx, z - hz) < r) return 60;
+  }
+
   return 80; // Open Tamil Nadu 4-Lane Highway (80 km/h limit)
 }
 
@@ -149,6 +221,16 @@ export function checkWrongWay(x: number, z: number, heading: number, speedKmh: n
       if (dz > 1.1 && fx > 0.42) return true;
       return false;
     }
+  }
+
+  // Check curved mountain ghat roads (2-lane undivided LHT)
+  const curved = getCurvedRoadAt(x, z, 7.5);
+  if (curved && Math.abs(curved.signedOffset) > 1.3) {
+    const alignDot = fx * curved.dirX + fz * curved.dirZ;
+    // Left side when traveling fwd (signedOffset > 0 in world XZ cross) drives forward (+dir)
+    //Wait: verify left vector for heading (dirX, dirZ): right = (-dirZ, dirX), left = (dirZ, -dirX) -> signedOffset = dx*dirZ - dz*dirX > 0 is LEFT!
+    if (curved.signedOffset > 1.3 && alignDot < -0.55) return true;
+    if (curved.signedOffset < -1.3 && alignDot > 0.55) return true;
   }
 
   return false;
@@ -321,6 +403,106 @@ class NavigationGraph {
           this.addEdge(`ext_E_${xi}_${zi}`, `app_E_${xi + 1}_${zi}`, 0, 'straight');
           this.addEdge(`ext_W_${xi + 1}_${zi}`, `app_W_${xi}_${zi}`, 0, 'straight');
         }
+      }
+    }
+
+    // Connect scenic CURVED_ROADS mountain hairpins as bi-directional LHT graph corridors
+    const curveOff = 2.6;
+    for (const cr of CURVED_ROADS) {
+      const pts = cr.points;
+      if (pts.length < 2) continue;
+
+      const fwdIds: string[] = [];
+      const revIds: string[] = [];
+
+      for (let k = 0; k < pts.length; k++) {
+        const pPrev = pts[Math.max(0, k - 1)];
+        const pNext = pts[Math.min(pts.length - 1, k + 1)];
+        const dx = pNext.x - pPrev.x;
+        const dz = pNext.z - pPrev.z;
+        const len = Math.hypot(dx, dz) || 1;
+        const dirX = dx / len;
+        const dirZ = dz / len;
+        // Left lateral vector in XZ (+Z=0, +X=90deg): left = (dirZ, -dirX)
+        const leftX = dirZ;
+        const leftZ = -dirX;
+
+        const fwdId = `cr_${cr.id}_fwd_${k}`;
+        const revId = `cr_${cr.id}_rev_${k}`;
+        fwdIds.push(fwdId);
+        revIds.push(revId);
+
+        this.addNode({
+          id: fwdId,
+          x: pts[k].x + leftX * curveOff,
+          z: pts[k].z + leftZ * curveOff,
+          dirX,
+          dirZ,
+          roadName: cr.name,
+        });
+        this.addNode({
+          id: revId,
+          x: pts[k].x - leftX * curveOff,
+          z: pts[k].z - leftZ * curveOff,
+          dirX: -dirX,
+          dirZ: -dirZ,
+          roadName: cr.name,
+        });
+      }
+
+      for (let k = 0; k < pts.length - 1; k++) {
+        this.addEdge(fwdIds[k], fwdIds[k + 1], 0, 'straight');
+        this.addEdge(revIds[k + 1], revIds[k], 0, 'straight');
+      }
+
+      // Connect both endpoints of the curved ghat to the closest trunk intersection nodes
+      const fromXi = vXs.indexOf(cr.fromAnchor.x);
+      const fromZi = hZs.indexOf(cr.fromAnchor.z);
+      const toXi = vXs.indexOf(cr.toAnchor.x);
+      const toZi = hZs.indexOf(cr.toAnchor.z);
+
+      const dirs = ['N', 'S', 'E', 'W'] as const;
+      if (fromXi >= 0 && fromZi >= 0) {
+        const firstFwd = this.nodes.get(fwdIds[0])!;
+        const firstRev = this.nodes.get(revIds[0])!;
+        dirs.forEach((d) => {
+          const app = this.nodes.get(`app_${d}_${fromXi}_${fromZi}`);
+          const ext = this.nodes.get(`ext_${d}_${fromXi}_${fromZi}`);
+          if (app) {
+            const dot = app.dirX * firstFwd.dirX + app.dirZ * firstFwd.dirZ;
+            const cross = app.dirX * firstFwd.dirZ - app.dirZ * firstFwd.dirX;
+            const hint: ManeuverType = dot > 0.5 ? 'straight' : cross < 0 ? 'left' : 'right';
+            this.addEdge(app.id, fwdIds[0], dot < -0.5 ? 24 : 3, hint);
+          }
+          if (ext) {
+            const dot = firstRev.dirX * ext.dirX + firstRev.dirZ * ext.dirZ;
+            const cross = firstRev.dirX * ext.dirZ - firstRev.dirZ * ext.dirX;
+            const hint: ManeuverType = dot > 0.5 ? 'straight' : cross < 0 ? 'left' : 'right';
+            this.addEdge(revIds[0], ext.id, dot < -0.5 ? 24 : 3, hint);
+          }
+        });
+      }
+
+      if (toXi >= 0 && toZi >= 0) {
+        const lastIdx = pts.length - 1;
+        const lastFwd = this.nodes.get(fwdIds[lastIdx])!;
+        const lastRev = this.nodes.get(revIds[lastIdx])!;
+        dirs.forEach((d) => {
+          const ext = this.nodes.get(`ext_${d}_${toXi}_${toZi}`);
+          const app = this.nodes.get(`app_${d}_${toXi}_${toZi}`);
+          if (ext) {
+            const dot = lastFwd.dirX * ext.dirX + lastFwd.dirZ * ext.dirZ;
+            const cross = lastFwd.dirX * ext.dirZ - lastFwd.dirZ * ext.dirX;
+            const hint: ManeuverType = dot > 0.5 ? 'straight' : cross < 0 ? 'left' : 'right';
+            this.addEdge(fwdIds[lastIdx], ext.id, dot < -0.5 ? 24 : 3, hint);
+          }
+          if (app) {
+            const dot = app.dirX * lastRev.dirX + app.dirZ * lastRev.dirZ;
+            const cross = app.dirX * lastRev.dirZ - app.dirZ * lastRev.dirX;
+            const hint: ManeuverType = dot > 0.5 ? 'straight' : cross < 0 ? 'left' : 'right';
+            this.addEdge(app.id, revIds[lastIdx], dot < -0.5 ? 24 : 3, hint);
+          }
+        });
       }
     }
   }
@@ -587,7 +769,7 @@ class NavigationGraph {
         steps: [
           {
             maneuver: 'arrive',
-            instruction: `Explore Coimbatore starting from ${only.nameEn}`,
+            instruction: `Explore Tamil Nadu starting from ${only.nameEn}`,
             roadName: only.landmark,
             distanceMeters: 0,
             speedLimitKmh: 60,
@@ -611,8 +793,8 @@ class NavigationGraph {
       steps.push(...seg.steps);
     }
 
-    // Avg city bus operating speed (~42 km/h = 11.6 m/s) + 12s per stop dwell & signal delay
-    const estimatedSeconds = Math.round(totalDistanceMeters / 11.6) + (stopSequence.length - 1) * 14;
+    // Avg Tamil Nadu intercity bus speed (~46 km/h = 12.8 m/s) + 12s per stop dwell & toll delay
+    const estimatedSeconds = Math.round(totalDistanceMeters / 12.4) + (stopSequence.length - 1) * 14;
 
     return {
       totalDistanceMeters: Math.round(totalDistanceMeters),
@@ -630,7 +812,6 @@ class NavigationGraph {
     const fx = Math.sin(origin.idealHeading);
     const fz = Math.cos(origin.idealHeading);
 
-    // Build readable step-by-step instructions by inspecting direction shifts along advice.waypoints
     const wps = advice.waypoints;
     let legDistanceMeters = 0;
     for (let i = 0; i < wps.length - 1; i++) {
@@ -643,11 +824,13 @@ class NavigationGraph {
     let accumDist = 0;
 
     const getRoadNameAt = (px: number, pz: number): string => {
+      const cr = getCurvedRoadAt(px, pz, 14);
+      if (cr) return cr.roadName;
       for (const vx of ROAD_NETWORK.verticalX) {
-        if (Math.abs(px - vx) < 11) return ROAD_NAMES_VERTICAL[vx] || 'Coimbatore Main Rd';
+        if (Math.abs(px - vx) < 12) return ROAD_NAMES_VERTICAL[vx] || 'Tamil Nadu State Highway';
       }
       for (const hz of ROAD_NETWORK.horizontalZ) {
-        if (Math.abs(pz - hz) < 11) return ROAD_NAMES_HORIZONTAL[hz] || 'Coimbatore Boulevard';
+        if (Math.abs(pz - hz) < 12) return ROAD_NAMES_HORIZONTAL[hz] || 'Tamil Nadu Cross Hwy';
       }
       return dest.nameEn;
     };
@@ -661,19 +844,18 @@ class NavigationGraph {
       const nx = dx / segLen;
       const nz = dz / segLen;
       const dot = prevDirX * nx + prevDirZ * nz;
-      const cross = prevDirX * nz - prevDirZ * nx; // Note: +Z/+X right-handed Y-up check
-      // In our world heading (+Z=0, +X=+pi/2): Turning left increases heading (positive delta angle);
-      // sin(theta) = dirX, cos(theta) = dirZ => cross(prev, next) = prevX*nextZ - prevZ*nextX:
-      // from +Z (0,1) to +X (1,0): 0*0 - 1*1 = -1 -> LEFT turn; to -X (-1,0): 0*0 - 1*(-1) = +1 -> RIGHT turn!
+      const cross = prevDirX * nz - prevDirZ * nx;
+      const onCurved = !!getCurvedRoadAt(wps[i].x, wps[i].z, 12);
+      const zoneLimit = getZoneSpeedLimit(wps[i + 1].x, wps[i + 1].z);
 
-      if (dot < -0.55) {
+      if (dot < -0.55 && !onCurved) {
         if (accumDist > 5) {
           steps.push({
             maneuver: 'straight',
             instruction: `Drive along ${getRoadNameAt(wps[i].x, wps[i].z)}`,
             roadName: getRoadNameAt(wps[i].x, wps[i].z),
             distanceMeters: Math.round(accumDist),
-            speedLimitKmh: 60,
+            speedLimitKmh: getZoneSpeedLimit(wps[i].x, wps[i].z),
           });
           accumDist = 0;
         }
@@ -691,7 +873,7 @@ class NavigationGraph {
             instruction: `Continue straight along ${getRoadNameAt(wps[i].x, wps[i].z)}`,
             roadName: getRoadNameAt(wps[i].x, wps[i].z),
             distanceMeters: Math.round(accumDist),
-            speedLimitKmh: 60,
+            speedLimitKmh: getZoneSpeedLimit(wps[i].x, wps[i].z),
           });
           accumDist = 0;
         }
@@ -699,10 +881,16 @@ class NavigationGraph {
         const roadName = getRoadNameAt(wps[i + 1].x, wps[i + 1].z);
         steps.push({
           maneuver: turn,
-          instruction: turn === 'left' ? `Turn Left onto ${roadName}` : `Turn Right onto ${roadName}`,
+          instruction: onCurved
+            ? turn === 'left'
+              ? `Swing Left around Ghat Hairpin on ${roadName}`
+              : `Swing Right around Ghat Hairpin on ${roadName}`
+            : turn === 'left'
+            ? `Turn Left onto ${roadName}`
+            : `Turn Right onto ${roadName}`,
           roadName,
           distanceMeters: Math.round(segLen),
-          speedLimitKmh: 40,
+          speedLimitKmh: Math.min(45, zoneLimit),
         });
       } else {
         accumDist += segLen;
@@ -718,7 +906,7 @@ class NavigationGraph {
         instruction: `Stay left & approach ${dest.nameEn}`,
         roadName: dest.nameEn,
         distanceMeters: Math.round(accumDist),
-        speedLimitKmh: 50,
+        speedLimitKmh: getZoneSpeedLimit(dest.x, dest.z),
       });
     }
 

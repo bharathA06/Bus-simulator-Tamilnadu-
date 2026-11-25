@@ -1,7 +1,22 @@
 import * as THREE from 'three';
 import { ROAD_NETWORK, getTerrainHeight } from './constants';
+import { TrafficDensity, TrafficSpeedMode } from './gameStore';
 import { getSignalState } from './navigationSystem';
 import { createAiBus, createAutoRickshaw, createMotorbike } from './proceduralModels';
+
+export const TRAFFIC_DENSITY_COUNTS: Record<TrafficDensity, number> = {
+  off: 0,
+  light: 16,
+  normal: 33,
+  heavy: 50,
+  rush: 66,
+};
+
+export const TRAFFIC_SPEED_MULTS: Record<TrafficSpeedMode, number> = {
+  calm: 0.72,
+  normal: 1.0,
+  fast: 1.28,
+};
 
 type TurnPhase = {
   p0x: number;
@@ -24,6 +39,7 @@ export interface TrafficVehicle {
   x: number;
   z: number;
   speed: number;
+  baseTargetSpeed: number;
   targetSpeed: number;
   heading: number;
   lane: 'vertical' | 'horizontal';
@@ -53,12 +69,20 @@ function getLanePosition(
 
 export function createTrafficSystem(scene: THREE.Scene): {
   vehicles: TrafficVehicle[];
+  getActiveVehicles: () => TrafficVehicle[];
+  setTrafficSettings: (
+    density: TrafficDensity,
+    speedMode: TrafficSpeedMode,
+    busX?: number,
+    busZ?: number
+  ) => void;
   updateTraffic: (
     delta: number,
     busX: number,
     busZ: number,
     busHeading?: number,
-    timeSec?: number
+    timeSec?: number,
+    viewRadius?: number
   ) => { collided: boolean; vehicle?: TrafficVehicle };
   setTrafficLights: (lightsOn: boolean) => void;
   dispose: () => void;
@@ -66,6 +90,8 @@ export function createTrafficSystem(scene: THREE.Scene): {
   const vehicles: TrafficVehicle[] = [];
   const headLampMats: THREE.MeshStandardMaterial[] = [];
   const tailLampMats: THREE.MeshStandardMaterial[] = [];
+  let activeLimit = TRAFFIC_DENSITY_COUNTS.normal;
+  let speedMult = TRAFFIC_SPEED_MULTS.normal;
 
   const createCityCar = (
     colorHex: number
@@ -245,46 +271,103 @@ export function createTrafficSystem(scene: THREE.Scene): {
     lane: 'vertical' | 'horizontal';
     dir: 1 | -1;
   }> = [
-    // Coimbatore – Salem NH-544 (X=-80)
-    { roadCoord: -80, along: -240, offset: 5.2, type: 'auto', lane: 'vertical', dir: 1 },
-    { roadCoord: -80, along: -60, offset: 2.8, type: 'car', lane: 'vertical', dir: 1 },
-    { roadCoord: -80, along: 130, offset: 5.2, type: 'bike', lane: 'vertical', dir: -1 },
-    { roadCoord: -80, along: -25, offset: 2.8, type: 'bus', lane: 'vertical', dir: -1 },
-    { roadCoord: -80, along: 220, offset: 2.8, type: 'lorry', lane: 'vertical', dir: 1 },
+    // Coimbatore – Salem NH-544 (X=-240)
+    { roadCoord: -240, along: -410, offset: 5.2, type: 'auto', lane: 'vertical', dir: 1 },
+    { roadCoord: -240, along: -210, offset: 2.8, type: 'car', lane: 'vertical', dir: 1 },
+    { roadCoord: -240, along: -110, offset: 5.2, type: 'bike', lane: 'vertical', dir: -1 },
+    { roadCoord: -240, along: 35, offset: 2.8, type: 'bus', lane: 'vertical', dir: -1 },
+    { roadCoord: -240, along: 220, offset: 2.8, type: 'lorry', lane: 'vertical', dir: 1 },
+    { roadCoord: -240, along: 380, offset: 5.2, type: 'auto', lane: 'vertical', dir: -1 },
 
-    // Nilgiri Ghat & Pollachi Hwy (X=-240)
-    { roadCoord: -240, along: -200, offset: 5.2, type: 'car', lane: 'vertical', dir: 1 },
-    { roadCoord: -240, along: 85, offset: 5.2, type: 'bike', lane: 'vertical', dir: -1 },
-    { roadCoord: -240, along: 245, offset: 2.8, type: 'lorry', lane: 'vertical', dir: 1 },
+    // Nilgiri Ghat & Pollachi Hwy (X=-480)
+    { roadCoord: -480, along: -430, offset: 5.2, type: 'car', lane: 'vertical', dir: 1 },
+    { roadCoord: -480, along: -210, offset: 5.2, type: 'bike', lane: 'vertical', dir: -1 },
+    { roadCoord: -480, along: 140, offset: 2.8, type: 'lorry', lane: 'vertical', dir: 1 },
+    { roadCoord: -480, along: 360, offset: 5.2, type: 'auto', lane: 'vertical', dir: -1 },
 
-    // Erode – Trichy – Madurai Hwy (X=80)
-    { roadCoord: 80, along: -210, offset: 2.8, type: 'bus', lane: 'vertical', dir: 1 },
-    { roadCoord: 80, along: -45, offset: 5.2, type: 'auto', lane: 'vertical', dir: -1 },
-    { roadCoord: 80, along: 140, offset: 2.8, type: 'car', lane: 'vertical', dir: 1 },
-    { roadCoord: 80, along: 260, offset: 5.2, type: 'bike', lane: 'vertical', dir: -1 },
+    // Erode – Dindigul – Tirunelveli NH-44 (X=0)
+    { roadCoord: 0, along: -340, offset: 2.8, type: 'bus', lane: 'vertical', dir: 1 },
+    { roadCoord: 0, along: -115, offset: 5.2, type: 'auto', lane: 'vertical', dir: -1 },
+    { roadCoord: 0, along: 140, offset: 2.8, type: 'car', lane: 'vertical', dir: 1 },
+    { roadCoord: 0, along: 430, offset: 5.2, type: 'bike', lane: 'vertical', dir: -1 },
 
-    // Chennai ECR – Rameswaram Trunk (X=240)
-    { roadCoord: 240, along: -260, offset: 2.8, type: 'bus', lane: 'vertical', dir: 1 },
-    { roadCoord: 240, along: -115, offset: 5.2, type: 'auto', lane: 'vertical', dir: -1 },
-    { roadCoord: 240, along: 45, offset: 2.8, type: 'car', lane: 'vertical', dir: 1 },
-    { roadCoord: 240, along: 205, offset: 2.8, type: 'lorry', lane: 'vertical', dir: -1 },
+    // Trichy – Madurai Heritage Hwy (X=240)
+    { roadCoord: 240, along: -390, offset: 2.8, type: 'car', lane: 'vertical', dir: 1 },
+    { roadCoord: 240, along: -135, offset: 5.2, type: 'auto', lane: 'vertical', dir: -1 },
+    { roadCoord: 240, along: 165, offset: 2.8, type: 'bus', lane: 'vertical', dir: 1 },
+    { roadCoord: 240, along: 355, offset: 5.2, type: 'bike', lane: 'vertical', dir: -1 },
 
-    // Northern Express NH-48 (Z=-280)
-    { roadCoord: -280, along: -155, offset: 2.8, type: 'car', lane: 'horizontal', dir: 1 },
-    { roadCoord: -280, along: 155, offset: 2.8, type: 'lorry', lane: 'horizontal', dir: -1 },
+    // Chennai CMBT – ECR – Rameswaram Trunk (X=480)
+    { roadCoord: 480, along: -420, offset: 2.8, type: 'bus', lane: 'vertical', dir: 1 },
+    { roadCoord: 480, along: -215, offset: 5.2, type: 'auto', lane: 'vertical', dir: -1 },
+    { roadCoord: 480, along: 45, offset: 2.8, type: 'car', lane: 'vertical', dir: 1 },
+    { roadCoord: 480, along: 245, offset: 2.8, type: 'lorry', lane: 'vertical', dir: -1 },
 
-    // Kongu Industrial Corridor (Z=-100)
-    { roadCoord: -100, along: -145, offset: 5.2, type: 'auto', lane: 'horizontal', dir: 1 },
-    { roadCoord: -100, along: 35, offset: 2.8, type: 'car', lane: 'horizontal', dir: -1 },
-    { roadCoord: -100, along: 195, offset: 5.2, type: 'bike', lane: 'horizontal', dir: 1 },
+    // Northern Express NH-48 (Z=-520)
+    { roadCoord: -520, along: -185, offset: 2.8, type: 'car', lane: 'horizontal', dir: 1 },
+    { roadCoord: -520, along: 215, offset: 2.8, type: 'lorry', lane: 'horizontal', dir: -1 },
 
-    // Cauvery – Madurai Heritage Hwy (Z=100)
-    { roadCoord: 100, along: -120, offset: 5.2, type: 'auto', lane: 'horizontal', dir: 1 },
-    { roadCoord: 100, along: 130, offset: 2.8, type: 'bus', lane: 'horizontal', dir: -1 },
+    // Kongu – Trichy Industrial Corridor (Z=-260)
+    { roadCoord: -260, along: -175, offset: 5.2, type: 'auto', lane: 'horizontal', dir: 1 },
+    { roadCoord: -260, along: 65, offset: 2.8, type: 'car', lane: 'horizontal', dir: -1 },
+    { roadCoord: -260, along: 335, offset: 5.2, type: 'bike', lane: 'horizontal', dir: 1 },
 
-    // Southern Coastal Hwy (Z=280)
-    { roadCoord: 280, along: -40, offset: 2.8, type: 'car', lane: 'horizontal', dir: 1 },
-    { roadCoord: 280, along: 190, offset: 5.2, type: 'bike', lane: 'horizontal', dir: -1 },
+    // Singanallur – Cauvery Cross Hwy (Z=0)
+    { roadCoord: 0, along: -180, offset: 5.2, type: 'auto', lane: 'horizontal', dir: 1 },
+    { roadCoord: 0, along: 130, offset: 2.8, type: 'bus', lane: 'horizontal', dir: -1 },
+
+    // Madurai – Palani Hwy (Z=260)
+    { roadCoord: 260, along: -110, offset: 2.8, type: 'car', lane: 'horizontal', dir: 1 },
+    { roadCoord: 260, along: 190, offset: 5.2, type: 'auto', lane: 'horizontal', dir: -1 },
+
+    // Southern Coastal Hwy (Z=520)
+    { roadCoord: 520, along: -80, offset: 2.8, type: 'car', lane: 'horizontal', dir: 1 },
+    { roadCoord: 520, along: 190, offset: 5.2, type: 'bike', lane: 'horizontal', dir: -1 },
+
+    // Heavy / Peak Rush Additional Tamil Nadu Fleet (34..66)
+    { roadCoord: -240, along: -315, offset: 2.8, type: 'car', lane: 'vertical', dir: -1 },
+    { roadCoord: -240, along: -65, offset: 2.8, type: 'bus', lane: 'vertical', dir: 1 },
+    { roadCoord: -240, along: 120, offset: 5.2, type: 'bike', lane: 'vertical', dir: 1 },
+    { roadCoord: -240, along: 295, offset: 2.8, type: 'car', lane: 'vertical', dir: -1 },
+    { roadCoord: -240, along: 465, offset: 5.2, type: 'auto', lane: 'vertical', dir: 1 },
+
+    { roadCoord: -480, along: -325, offset: 5.2, type: 'auto', lane: 'vertical', dir: -1 },
+    { roadCoord: -480, along: -60, offset: 2.8, type: 'bus', lane: 'vertical', dir: 1 },
+    { roadCoord: -480, along: 255, offset: 2.8, type: 'car', lane: 'vertical', dir: -1 },
+
+    { roadCoord: 0, along: -460, offset: 2.8, type: 'lorry', lane: 'vertical', dir: 1 },
+    { roadCoord: 0, along: -215, offset: 5.2, type: 'bike', lane: 'vertical', dir: 1 },
+    { roadCoord: 0, along: 35, offset: 2.8, type: 'car', lane: 'vertical', dir: -1 },
+    { roadCoord: 0, along: 285, offset: 5.2, type: 'auto', lane: 'vertical', dir: 1 },
+
+    { roadCoord: 240, along: -480, offset: 5.2, type: 'bike', lane: 'vertical', dir: -1 },
+    { roadCoord: 240, along: -245, offset: 2.8, type: 'lorry', lane: 'vertical', dir: 1 },
+    { roadCoord: 240, along: 40, offset: 5.2, type: 'auto', lane: 'vertical', dir: -1 },
+    { roadCoord: 240, along: 265, offset: 2.8, type: 'car', lane: 'vertical', dir: 1 },
+
+    { roadCoord: 480, along: -325, offset: 5.2, type: 'bike', lane: 'vertical', dir: 1 },
+    { roadCoord: 480, along: -95, offset: 2.8, type: 'bus', lane: 'vertical', dir: -1 },
+    { roadCoord: 480, along: 145, offset: 5.2, type: 'auto', lane: 'vertical', dir: 1 },
+    { roadCoord: 480, along: 375, offset: 2.8, type: 'car', lane: 'vertical', dir: -1 },
+
+    { roadCoord: -520, along: -365, offset: 5.2, type: 'auto', lane: 'horizontal', dir: 1 },
+    { roadCoord: -520, along: -45, offset: 2.8, type: 'bus', lane: 'horizontal', dir: -1 },
+    { roadCoord: -520, along: 360, offset: 5.2, type: 'bike', lane: 'horizontal', dir: 1 },
+
+    { roadCoord: -260, along: -380, offset: 2.8, type: 'lorry', lane: 'horizontal', dir: -1 },
+    { roadCoord: -260, along: -55, offset: 5.2, type: 'auto', lane: 'horizontal', dir: 1 },
+    { roadCoord: -260, along: 185, offset: 2.8, type: 'car', lane: 'horizontal', dir: -1 },
+
+    { roadCoord: 0, along: -365, offset: 2.8, type: 'car', lane: 'horizontal', dir: 1 },
+    { roadCoord: 0, along: -65, offset: 5.2, type: 'bike', lane: 'horizontal', dir: -1 },
+    { roadCoord: 0, along: 310, offset: 2.8, type: 'lorry', lane: 'horizontal', dir: 1 },
+
+    { roadCoord: 260, along: -355, offset: 5.2, type: 'bike', lane: 'horizontal', dir: -1 },
+    { roadCoord: 260, along: 45, offset: 2.8, type: 'bus', lane: 'horizontal', dir: 1 },
+    { roadCoord: 260, along: 355, offset: 5.2, type: 'auto', lane: 'horizontal', dir: -1 },
+
+    { roadCoord: 520, along: -335, offset: 2.8, type: 'lorry', lane: 'horizontal', dir: 1 },
+    { roadCoord: 520, along: 45, offset: 5.2, type: 'auto', lane: 'horizontal', dir: -1 },
   ];
 
   const pickNextTurn = (): 'straight' | 'left' | 'right' | 'uturn' => {
@@ -338,7 +421,17 @@ export function createTrafficSystem(scene: THREE.Scene): {
         ? Math.PI / 2
         : -Math.PI / 2;
     mesh.rotation.y = heading;
+    mesh.visible = idx < activeLimit;
     scene.add(mesh);
+
+    const baseTargetSpeed =
+      cfg.type === 'lorry'
+        ? 10.5
+        : cfg.type === 'bus'
+        ? 13.0
+        : cfg.type === 'bike'
+        ? 14.5
+        : 12.0 + Math.random() * 6;
 
     vehicles.push({
       mesh,
@@ -346,14 +439,8 @@ export function createTrafficSystem(scene: THREE.Scene): {
       x,
       z,
       speed: cfg.type === 'bike' ? 13 : 10 + Math.random() * 5,
-      targetSpeed:
-        cfg.type === 'lorry'
-          ? 10.5
-          : cfg.type === 'bus'
-          ? 13.0
-          : cfg.type === 'bike'
-          ? 14.5
-          : 12.0 + Math.random() * 6,
+      baseTargetSpeed,
+      targetSpeed: baseTargetSpeed * speedMult,
       heading,
       lane: cfg.lane,
       roadCoord: cfg.roadCoord,
@@ -471,21 +558,60 @@ export function createTrafficSystem(scene: THREE.Scene): {
 
   return {
     vehicles,
+    getActiveVehicles: () => vehicles.slice(0, activeLimit),
+    setTrafficSettings: (
+      density: TrafficDensity,
+      speedMode: TrafficSpeedMode,
+      busX?: number,
+      busZ?: number
+    ) => {
+      const prevLimit = activeLimit;
+      activeLimit = Math.min(vehicles.length, TRAFFIC_DENSITY_COUNTS[density] ?? 33);
+      speedMult = TRAFFIC_SPEED_MULTS[speedMode] ?? 1.0;
+
+      vehicles.forEach((veh, idx) => {
+        veh.targetSpeed = veh.baseTargetSpeed * speedMult;
+        if (idx >= activeLimit) {
+          veh.mesh.visible = false;
+          veh.turnPhase = null;
+        } else if (idx >= prevLimit && busX !== undefined && busZ !== undefined) {
+          // Avoid spawning newly activated traffic directly on top of the player bus
+          if (Math.hypot(veh.x - busX, veh.z - busZ) < 26) {
+            if (veh.lane === 'vertical') {
+              veh.z += veh.direction * 48;
+              if (veh.z > maxZLoop) veh.z = minZLoop + 10;
+              if (veh.z < minZLoop) veh.z = maxZLoop - 10;
+            } else {
+              veh.x += veh.direction * 48;
+              if (veh.x > maxXLoop) veh.x = minXLoop + 10;
+              if (veh.x < minXLoop) veh.x = maxXLoop - 10;
+            }
+            veh.mesh.position.set(veh.x, getTerrainHeight(veh.x, veh.z), veh.z);
+          }
+        }
+      });
+    },
     updateTraffic: (
       delta: number,
       busX: number,
       busZ: number,
       busHeading: number = 0,
-      timeSec: number = 0
+      timeSec: number = 0,
+      viewRadius: number = 420
     ) => {
       let collided = false;
       let hitVeh: TrafficVehicle | undefined;
+      if (activeLimit <= 0) {
+        return { collided: false, vehicle: undefined };
+      }
+
       const blinkOn = Math.sin(timeSec * 8.5) > 0;
       const busSin = Math.sin(busHeading);
       const busCos = Math.cos(busHeading);
       const busSpineOffsets = [3.1, 0, -2.9];
 
-      vehicles.forEach((veh, selfIdx) => {
+      for (let selfIdx = 0; selfIdx < activeLimit; selfIdx++) {
+        const veh = vehicles[selfIdx];
         let minBusDist = Infinity;
         let nearestSpineDx = busX - veh.x;
         let nearestSpineDz = busZ - veh.z;
@@ -521,7 +647,7 @@ export function createTrafficSystem(scene: THREE.Scene): {
           }
         }
 
-        for (let j = 0; j < vehicles.length; j++) {
+        for (let j = 0; j < activeLimit; j++) {
           if (j === selfIdx) continue;
           const other = vehicles[j];
           const dxO = other.x - veh.x;
@@ -693,14 +819,16 @@ export function createTrafficSystem(scene: THREE.Scene): {
           }
         }
 
-        const wheelSpin = (veh.speed * delta) / 0.32;
-        veh.wheels.forEach((w) => {
-          w.rotation.x += wheelSpin;
-        });
-
-        veh.mesh.position.set(veh.x, getTerrainHeight(veh.x, veh.z), veh.z);
-        veh.mesh.rotation.y = veh.heading;
-      });
+        veh.mesh.visible = minBusDist <= viewRadius + 90;
+        if (veh.mesh.visible) {
+          const wheelSpin = (veh.speed * delta) / 0.32;
+          veh.wheels.forEach((w) => {
+            w.rotation.x += wheelSpin;
+          });
+          veh.mesh.position.set(veh.x, getTerrainHeight(veh.x, veh.z), veh.z);
+          veh.mesh.rotation.y = veh.heading;
+        }
+      }
 
       return { collided, vehicle: hitVeh };
     },

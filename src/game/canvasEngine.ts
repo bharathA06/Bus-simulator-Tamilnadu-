@@ -5,11 +5,14 @@ import {
   GameMode,
   GameSettings,
   SpeedUnit,
+  TrafficDensity,
 } from './gameStore';
+import { TRAFFIC_SPEED_MULTS } from './trafficSystem';
 import {
   BUS_LIVERIES,
   BUS_STOPS,
   CAMERA_MODES,
+  CURVED_ROADS,
   HIGHWAY_FACILITIES,
   ROAD_NETWORK,
   ROUTES,
@@ -24,6 +27,7 @@ import { BusPhysics } from './busPhysics';
 import { busAudio } from '../audio/busAudio';
 import { FacilityPrompt, GameTelemetry, ReplayFrame, RuleAlertEvent } from './gameEngine';
 import { checkWrongWay, getZoneSpeedLimit, navigationGraph } from './navigationSystem';
+import { ConvoyPeerTelemetry } from './convoySync';
 
 interface SimpleTrafficVeh {
   x: number;
@@ -106,8 +110,14 @@ export class CanvasEngine {
   private controlScheme: ControlScheme = 'both';
   private fareBonusMult: number = 1.0;
   private distanceTraveledMeters: number = 0;
+  private collisionCountTrip: number = 0;
 
   private traffic: SimpleTrafficVeh[] = [];
+  private activeTrafficLimit: number = 18;
+  private trafficSpeedMult: number = 1.0;
+  private convoyPeers: ConvoyPeerTelemetry[] = [];
+  private cameraYawOffset = 0;
+  private cameraPitchOffset = 0;
   private isPaused: boolean = true;
   private keysHeld: Record<string, boolean> = {};
   private mobileInputsActive = false;
@@ -117,7 +127,13 @@ export class CanvasEngine {
     success: boolean,
     earnings: number,
     satisfaction: number,
-    expenses?: { fuelSpent: number; tollsPaid: number; healthPct?: number; dirtinessPct?: number }
+    expenses?: {
+      fuelSpent: number;
+      tollsPaid: number;
+      healthPct?: number;
+      dirtinessPct?: number;
+      collisionsCount?: number;
+    }
   ) => void;
 
   constructor(
@@ -129,7 +145,13 @@ export class CanvasEngine {
       success: boolean,
       earnings: number,
       satisfaction: number,
-      expenses?: { fuelSpent: number; tollsPaid: number; healthPct?: number; dirtinessPct?: number }
+      expenses?: {
+        fuelSpent: number;
+        tollsPaid: number;
+        healthPct?: number;
+        dirtinessPct?: number;
+        collisionsCount?: number;
+      }
     ) => void
   ) {
     this.mount = mount;
@@ -151,7 +173,10 @@ export class CanvasEngine {
     this.activeHornId = livery.hornDefault;
     this.routeTimeLeft = route.targetSeconds;
     const spec = BUS_SHOP_SPECS.find((s) => s.liveryId === livery.id);
-    if (spec) this.physics.setBusTopSpeed(spec.topSpeedKmh);
+    if (spec) {
+      this.physics.setBusTopSpeed(spec.topSpeedKmh);
+      this.physics.setBusSpecs(spec.weightKg, spec.lengthMeters);
+    }
 
     this.totalPassengersTarget = route.stops.reduce((acc, sid) => {
       const stop = BUS_STOPS.find((st) => st.id === sid);
@@ -174,6 +199,7 @@ export class CanvasEngine {
       this.keysHeld = {};
       this.mobileInputsActive = false;
       this.physics.setInputs(0, 0, false, this.physics.state.isReverse, false);
+      busAudio.stopHorn();
     }
   }
 
@@ -193,6 +219,18 @@ export class CanvasEngine {
     this.physics.setSpeedLimiter80(settings.speedLimiter80 ?? true);
     busAudio.setMasterVolume(settings.masterVolume);
     busAudio.setMusicVolume(settings.musicVolume ?? 45);
+    const densityMap: Record<TrafficDensity, number> = {
+      off: 0,
+      light: 9,
+      normal: 18,
+      heavy: 27,
+      rush: 36,
+    };
+    this.activeTrafficLimit = Math.min(
+      this.traffic.length,
+      densityMap[settings.trafficDensity ?? 'normal']
+    );
+    this.trafficSpeedMult = TRAFFIC_SPEED_MULTS[settings.trafficSpeed ?? 'normal'] ?? 1.0;
   }
 
   public applyUpgrades(equippedIds: string[]) {
@@ -210,14 +248,43 @@ export class CanvasEngine {
 
   private initTraffic() {
     this.traffic = [
-      { x: -74.8, z: -220, type: 'auto', speed: 10, dir: 1, lane: 'vertical', color: '#facc15' },
-      { x: -85.2, z: 120, type: 'auto', speed: 12, dir: -1, lane: 'vertical', color: '#facc15' },
-      { x: 82.8, z: -40, type: 'car', speed: 14, dir: 1, lane: 'vertical', color: '#ffffff' },
-      { x: 237.2, z: -120, type: 'bus', speed: 13, dir: -1, lane: 'vertical', color: '#0284c7' },
-      { x: -140, z: -105.2, type: 'auto', speed: 11, dir: 1, lane: 'horizontal', color: '#facc15' },
-      { x: 100, z: -94.8, type: 'car', speed: 15, dir: -1, lane: 'horizontal', color: '#3b82f6' },
-      { x: -60, z: 94.8, type: 'bike', speed: 14, dir: 1, lane: 'horizontal', color: '#10b981' },
-      { x: 80, z: 285.2, type: 'auto', speed: 10, dir: -1, lane: 'horizontal', color: '#facc15' },
+      { x: -234.8, z: -220, type: 'auto', speed: 10, dir: 1, lane: 'vertical', color: '#facc15' },
+      { x: -245.2, z: 120, type: 'auto', speed: 12, dir: -1, lane: 'vertical', color: '#facc15' },
+      { x: 5.2, z: -40, type: 'car', speed: 14, dir: 1, lane: 'vertical', color: '#ffffff' },
+      { x: 245.2, z: -120, type: 'bus', speed: 13, dir: -1, lane: 'vertical', color: '#0284c7' },
+      { x: 474.8, z: -260, type: 'bus', speed: 14, dir: 1, lane: 'vertical', color: '#dc2626' },
+      { x: -474.8, z: 90, type: 'car', speed: 12, dir: -1, lane: 'vertical', color: '#e2e8f0' },
+      { x: -140, z: -254.8, type: 'auto', speed: 11, dir: 1, lane: 'horizontal', color: '#facc15' },
+      { x: 100, z: -5.2, type: 'car', speed: 15, dir: -1, lane: 'horizontal', color: '#3b82f6' },
+      { x: -60, z: 254.8, type: 'bike', speed: 14, dir: 1, lane: 'horizontal', color: '#10b981' },
+      { x: 80, z: 514.8, type: 'auto', speed: 10, dir: -1, lane: 'horizontal', color: '#facc15' },
+      { x: 220, z: -514.8, type: 'car', speed: 16, dir: 1, lane: 'horizontal', color: '#f97316' },
+      { x: -234.8, z: 320, type: 'bus', speed: 13, dir: 1, lane: 'vertical', color: '#0284c7' },
+      { x: -5.2, z: 240, type: 'auto', speed: 11, dir: -1, lane: 'vertical', color: '#facc15' },
+      { x: 234.8, z: 180, type: 'car', speed: 14, dir: 1, lane: 'vertical', color: '#f8fafc' },
+      { x: 485.2, z: 140, type: 'bike', speed: 15, dir: -1, lane: 'vertical', color: '#1d4ed8' },
+      { x: -485.2, z: -310, type: 'auto', speed: 10, dir: 1, lane: 'vertical', color: '#facc15' },
+      { x: -310, z: 5.2, type: 'car', speed: 14, dir: 1, lane: 'horizontal', color: '#dc2626' },
+      { x: 310, z: 265.2, type: 'bus', speed: 12, dir: -1, lane: 'horizontal', color: '#1e3a8a' },
+      // Heavy & Peak Rush pool (18..36)
+      { x: -245.2, z: -360, type: 'car', speed: 14, dir: -1, lane: 'vertical', color: '#475569' },
+      { x: -234.8, z: 40, type: 'bike', speed: 15, dir: 1, lane: 'vertical', color: '#0f766e' },
+      { x: 5.2, z: -340, type: 'bus', speed: 13, dir: 1, lane: 'vertical', color: '#0284c7' },
+      { x: -5.2, z: 430, type: 'car', speed: 14, dir: -1, lane: 'vertical', color: '#d97706' },
+      { x: 234.8, z: -390, type: 'car', speed: 15, dir: 1, lane: 'vertical', color: '#2563eb' },
+      { x: 245.2, z: 355, type: 'bike', speed: 14, dir: -1, lane: 'vertical', color: '#dc2626' },
+      { x: 474.8, z: 45, type: 'car', speed: 14, dir: 1, lane: 'vertical', color: '#0f766e' },
+      { x: 485.2, z: -215, type: 'auto', speed: 11, dir: -1, lane: 'vertical', color: '#facc15' },
+      { x: -474.8, z: -420, type: 'car', speed: 13, dir: 1, lane: 'vertical', color: '#ffffff' },
+      { x: -185, z: -524.8, type: 'car', speed: 15, dir: 1, lane: 'horizontal', color: '#3b82f6' },
+      { x: 215, z: -514.8, type: 'bus', speed: 12, dir: -1, lane: 'horizontal', color: '#0284c7' },
+      { x: -340, z: -265.2, type: 'car', speed: 14, dir: -1, lane: 'horizontal', color: '#e2e8f0' },
+      { x: 335, z: -254.8, type: 'bike', speed: 15, dir: 1, lane: 'horizontal', color: '#f59e0b' },
+      { x: -180, z: 5.2, type: 'auto', speed: 11, dir: 1, lane: 'horizontal', color: '#facc15' },
+      { x: 260, z: -5.2, type: 'bus', speed: 13, dir: -1, lane: 'horizontal', color: '#1e3a8a' },
+      { x: -110, z: 254.8, type: 'car', speed: 14, dir: 1, lane: 'horizontal', color: '#dc2626' },
+      { x: 190, z: 525.2, type: 'bike', speed: 15, dir: -1, lane: 'horizontal', color: '#10b981' },
+      { x: -335, z: 514.8, type: 'car', speed: 13, dir: 1, lane: 'horizontal', color: '#f8fafc' },
     ];
   }
 
@@ -324,6 +391,14 @@ export class CanvasEngine {
 
   public playAirHorn() {
     busAudio.playHorn(this.activeHornId);
+  }
+
+  public startAirHorn() {
+    busAudio.startHorn(this.activeHornId);
+  }
+
+  public stopAirHorn() {
+    busAudio.stopHorn();
   }
 
   public playConductorWhistle() {
@@ -511,16 +586,35 @@ export class CanvasEngine {
 
   public cycleCamera() {
     this.cameraMode = (this.cameraMode + 1) % CAMERA_MODES.length;
+    this.resetCameraLook();
   }
 
   public setCameraMode(mode: number) {
     this.cameraMode = Math.max(0, Math.min(CAMERA_MODES.length - 1, mode));
+    this.resetCameraLook();
+  }
+
+  public setCameraLookDelta(dxNorm: number, dyNorm: number) {
+    this.cameraYawOffset = Math.max(-1.6, Math.min(1.6, this.cameraYawOffset - dxNorm * 1.8));
+    this.cameraPitchOffset = Math.max(-0.5, Math.min(0.5, this.cameraPitchOffset - dyNorm));
+  }
+
+  public resetCameraLook() {
+    this.cameraYawOffset = 0;
+    this.cameraPitchOffset = 0;
+  }
+
+  public setConvoyPeers(peers: ConvoyPeerTelemetry[]) {
+    this.convoyPeers = peers;
   }
 
   public setLivery(livery: BusLivery) {
     this.currentLivery = livery;
     const spec = BUS_SHOP_SPECS.find((s) => s.liveryId === livery.id);
-    if (spec) this.physics.setBusTopSpeed(spec.topSpeedKmh);
+    if (spec) {
+      this.physics.setBusTopSpeed(spec.topSpeedKmh);
+      this.physics.setBusSpecs(spec.weightKg, spec.lengthMeters);
+    }
     this.activeHornId = livery.hornDefault;
   }
 
@@ -560,6 +654,7 @@ export class CanvasEngine {
     this.isReplaying = false;
     this.satisfaction = 100;
     this.distanceTraveledMeters = 0;
+    this.collisionCountTrip = 0;
     this.routeTimeLeft = route.targetSeconds;
     this.routeCompleted = false;
     this.missionFailed = false;
@@ -573,9 +668,17 @@ export class CanvasEngine {
     this.physics.reset(firstStop.x, firstStop.z, firstStop.idealHeading);
   }
 
-  public setMobileInput(throttle: number, steer: number, brake: boolean, reverse: boolean) {
-    this.mobileInputsActive = throttle !== 0 || steer !== 0 || brake;
-    this.physics.setInputs(throttle, steer, brake, reverse);
+  public setMobileInput(
+    throttle: number,
+    steer: number,
+    brake: boolean | number,
+    reverse: boolean,
+    clutch: boolean = false,
+    handbrake?: boolean
+  ) {
+    const brakeActive = typeof brake === 'number' ? brake > 0.02 : brake;
+    this.mobileInputsActive = throttle !== 0 || steer !== 0 || brakeActive || clutch || !!handbrake;
+    this.physics.setInputs(throttle, steer, brake, reverse, clutch, handbrake);
     busAudio.startEngine();
     busAudio.startAmbientMusic();
   }
@@ -603,6 +706,7 @@ export class CanvasEngine {
     const count = stop ? stop.passengersWaiting : 4;
     const rate = stop ? stop.ticketRate : 25;
     this.passengersBoardedTotal += count;
+    this.physics.setPassengersCount(this.passengersBoardedTotal);
     this.ticketsIssued += count;
     this.totalEarnings += Math.round(count * rate * this.fareBonusMult);
     busAudio.playTicketPunch();
@@ -625,6 +729,7 @@ export class CanvasEngine {
           tollsPaid: this.tollsPaidTrip,
           healthPct: this.physics.state.healthPct,
           dirtinessPct: this.physics.state.dirtinessPct,
+          collisionsCount: this.collisionCountTrip,
         });
       }
     } else {
@@ -690,6 +795,8 @@ export class CanvasEngine {
       clutchPressed: s.clutchPressed,
       manualGearbox: s.manualGearbox,
       passengersBoarded: this.passengersBoardedTotal,
+      passengersOnboard: s.passengersOnboard,
+      totalMassKg: s.totalMassKg,
       totalPassengers: this.totalPassengersTarget,
       totalEarnings: this.totalEarnings,
       fuelSpentTrip: this.fuelSpentTrip,
@@ -723,7 +830,14 @@ export class CanvasEngine {
       maneuverDistance: advice.distanceMeters,
       nextRoadName: advice.nextRoadName,
       routePolyline: advice.waypoints,
-      trafficDots: this.traffic.map((v) => ({ x: v.x, z: v.z })),
+      trafficDots: this.traffic.slice(0, this.activeTrafficLimit).map((v) => ({ x: v.x, z: v.z })),
+      convoyPeers: this.convoyPeers.map((p) => ({
+        peerId: p.peerId,
+        driverName: p.driverName,
+        x: p.x,
+        z: p.z,
+        speedKmh: p.speedKmh,
+      })),
       isWrongWay,
       isSpeeding,
       zoneSpeedLimitKmh: zoneLimit,
@@ -740,6 +854,7 @@ export class CanvasEngine {
       replayProgressPct: replayPct,
       replayFrameCount: this.replayFrames.length,
       replaySpeedMult: this.replaySpeedMult,
+      collisionsCountTrip: this.collisionCountTrip,
     });
   }
 
@@ -797,27 +912,31 @@ export class CanvasEngine {
 
     const { hitObstacle } = this.physics.update(dt, []);
     if (hitObstacle) {
+      this.collisionCountTrip += 1;
       this.satisfaction = Math.max(0, this.satisfaction - 5);
       this.triggerRuleAlert('COLLISION DAMAGE & PENALTY', TRAFFIC_RULES.collisionFine, true);
     }
 
-    this.traffic.forEach((veh) => {
+    for (let i = 0; i < this.activeTrafficLimit; i++) {
+      const veh = this.traffic[i];
       const distToBus = Math.hypot(this.physics.state.x - veh.x, this.physics.state.z - veh.z);
       if (distToBus < 3.2) {
+        this.collisionCountTrip += 1;
         this.physics.handleCollisionImpact(1.0);
         this.satisfaction = Math.max(0, this.satisfaction - 8);
       }
 
+      const effSpeed = veh.speed * this.trafficSpeedMult;
       if (veh.lane === 'vertical') {
-        veh.z += veh.dir * veh.speed * dt;
-        if (veh.dir === 1 && veh.z > 350) veh.z = -350;
-        else if (veh.dir === -1 && veh.z < -350) veh.z = 350;
+        veh.z += veh.dir * effSpeed * dt;
+        if (veh.dir === 1 && veh.z > 620) veh.z = -620;
+        else if (veh.dir === -1 && veh.z < -620) veh.z = 620;
       } else {
-        veh.x += veh.dir * veh.speed * dt;
-        if (veh.dir === 1 && veh.x > 310) veh.x = -310;
-        else if (veh.dir === -1 && veh.x < -310) veh.x = 310;
+        veh.x += veh.dir * effSpeed * dt;
+        if (veh.dir === 1 && veh.x > 580) veh.x = -580;
+        else if (veh.dir === -1 && veh.x < -580) veh.x = 580;
       }
-    });
+    }
 
     if (this.wrongWayCooldown > 0) this.wrongWayCooldown -= dt;
     if (this.speedFineCooldown > 0) this.speedFineCooldown -= dt;
@@ -908,6 +1027,7 @@ export class CanvasEngine {
             tollsPaid: this.tollsPaidTrip,
             healthPct: s.healthPct,
             dirtinessPct: s.dirtinessPct,
+            collisionsCount: this.collisionCountTrip,
           });
         }
       }
@@ -952,20 +1072,37 @@ export class CanvasEngine {
     const scale = 5.5;
     ctx.scale(scale, scale);
 
-    if (this.cameraMode !== 5) {
-      ctx.rotate(s.heading);
+    if (this.cameraMode !== 6) {
+      ctx.rotate(s.heading + this.cameraYawOffset * 0.45);
     }
     ctx.translate(-s.x, -s.z);
 
     // Coastal Ocean
     ctx.fillStyle = '#0369a1';
-    ctx.fillRect(300, -450, 200, 950);
-    ctx.fillRect(-450, 340, 950, 200);
+    ctx.fillRect(580, -760, 320, 1520);
+    ctx.fillRect(-760, 620, 1520, 320);
 
-    // Divided 20m Road Network
+    // Divided 20m Road Network (5x5 Tamil Nadu Trunk Highways)
     ctx.fillStyle = '#27272a';
-    ROAD_NETWORK.verticalX.forEach((vx) => ctx.fillRect(vx - 10, -380, 20, 760));
-    ROAD_NETWORK.horizontalZ.forEach((hz) => ctx.fillRect(-340, hz - 10, 680, 20));
+    ROAD_NETWORK.verticalX.forEach((vx) => ctx.fillRect(vx - 10, -660, 20, 1320));
+    ROAD_NETWORK.horizontalZ.forEach((hz) => ctx.fillRect(-620, hz - 10, 1240, 20));
+
+    // Curved Mountain Hairpins
+    CURVED_ROADS.forEach((seg) => {
+      if (seg.points.length < 2) return;
+      ctx.save();
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = seg.width;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(seg.points[0].x, seg.points[0].z);
+      for (let i = 1; i < seg.points.length; i++) {
+        ctx.lineTo(seg.points[i].x, seg.points[i].z);
+      }
+      ctx.stroke();
+      ctx.restore();
+    });
 
     // Highway Facilities (Police Checkpost, Construction Zones, Tolls, Bunks, Rest Stops)
     HIGHWAY_FACILITIES.forEach((fac) => {
@@ -1008,7 +1145,8 @@ export class CanvasEngine {
     });
 
     // AI Traffic
-    this.traffic.forEach((v) => {
+    for (let i = 0; i < this.activeTrafficLimit; i++) {
+      const v = this.traffic[i];
       ctx.save();
       ctx.translate(v.x, v.z);
       ctx.rotate(v.lane === 'vertical' ? (v.dir === 1 ? 0 : Math.PI) : v.dir === 1 ? Math.PI / 2 : -Math.PI / 2);
@@ -1017,6 +1155,20 @@ export class CanvasEngine {
       const len = v.type === 'bike' ? 1.8 : v.type === 'bus' ? 8.5 : 3.2;
       ctx.fillRect(-w / 2, -len / 2, w, len);
       ctx.restore();
+    }
+
+    // Convoy Peer Buses
+    this.convoyPeers.forEach((p) => {
+      ctx.save();
+      ctx.translate(p.x, p.z);
+      ctx.rotate(-p.heading);
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillRect(-1.25, -4.7, 2.5, 9.4);
+      ctx.restore();
+      ctx.fillStyle = '#bae6fd';
+      ctx.font = 'bold 2.8px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(p.driverName.split(' ')[0], p.x, p.z - 6.5);
     });
 
     // Player Bus

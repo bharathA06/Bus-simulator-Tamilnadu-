@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   Award,
   Check,
@@ -11,7 +12,9 @@ import {
   X,
 } from 'lucide-react';
 import { BusLivery, RouteDefinition } from '../game/constants';
-import { GameMode } from '../game/gameStore';
+import { DailyMissionMetric, DailyMissionsState } from '../game/dailyMissions';
+import { GameMode, TrafficDensity, TrafficSpeedMode } from '../game/gameStore';
+import { DailyMissionsPanel } from './DailyMissionsPanel';
 
 interface PauseModalProps {
   isOpen: boolean;
@@ -22,6 +25,9 @@ interface PauseModalProps {
   route: RouteDefinition;
   livery: BusLivery;
   gameMode: GameMode;
+  trafficDensity: TrafficDensity;
+  trafficSpeed: TrafficSpeedMode;
+  onChangeTraffic: (density: TrafficDensity, speed: TrafficSpeedMode) => void;
 }
 
 export function PauseModal({
@@ -33,7 +39,12 @@ export function PauseModal({
   route,
   livery,
   gameMode,
+  trafficDensity,
+  trafficSpeed,
+  onChangeTraffic,
 }: PauseModalProps) {
+  const [confirmExit, setConfirmExit] = useState(false);
+
   if (!isOpen) return null;
 
   const keyBindings = [
@@ -43,36 +54,39 @@ export function PauseModal({
     ['Space', 'Service Air Brake'],
     ['Shift', 'Clutch Pedal'],
     ['G / F', '6-Speed Gear Up/Down'],
-    ['N', 'Parking Brake (P)'],
-    ['R', 'Reverse Toggle'],
+    ['N / R', 'Handbrake / Reverse'],
     ['E / B', 'Doors / Whistle'],
     ['T / U', 'Refuel / Tea Break'],
     ['M / O', 'FM Radio / Announce'],
-    ['Y / C', 'Mirror / 6 Cameras'],
+    ['Y / C', 'Mirror / 7 Cameras'],
+    ['Drag', 'Look Around Viewport'],
     ['L / J', 'Lights / High Beam'],
     ['Q / Z / X', 'Indicators / Hazard'],
     ['H / P / V / K', 'Horn/Wipe/CC/Weather'],
   ];
 
   return (
-    <div className="fixed inset-0 z-40 bg-neutral-950/80 backdrop-blur-md flex items-center justify-center p-4 select-none">
-      <div className="w-full max-w-2xl rounded-2xl bg-neutral-900 border border-white/15 shadow-2xl overflow-hidden text-white">
-        <div className="px-6 py-4 bg-neutral-950 border-b border-white/10 flex items-center justify-between">
+    <div className="fixed inset-0 z-40 bg-neutral-950/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto select-none">
+      <div className="w-full max-w-2xl rounded-2xl bg-neutral-900 border border-white/15 shadow-2xl overflow-hidden text-white my-auto">
+        <div className="px-5 py-4 bg-neutral-950 border-b border-white/10 flex items-center justify-between">
           <div>
             <span className="text-[10px] font-mono uppercase tracking-widest text-amber-400">
               Tamil Nadu Bus Simulator · {gameMode === 'career' ? 'Career Trip' : 'Free Roam'}
             </span>
-            <h2 className="text-xl font-black mt-0.5">Simulation Paused</h2>
+            <h2 className="text-lg sm:text-xl font-black mt-0.5">Simulation Paused</h2>
           </div>
           <button
-            onClick={onResume}
-            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-neutral-300 cursor-pointer"
+            onClick={() => {
+              setConfirmExit(false);
+              onResume();
+            }}
+            className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-white/10 hover:bg-white/20 text-neutral-300 flex items-center justify-center cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-6 space-y-5">
+        <div className="p-5 space-y-4">
           <div className="p-3.5 rounded-xl bg-white/5 border border-white/10 flex flex-wrap items-center justify-between gap-2">
             <div>
               <div className="text-xs font-bold text-emerald-400">
@@ -85,12 +99,55 @@ export function PauseModal({
             </span>
           </div>
 
-          {/* Controls Quick Reference */}
+          <div className="p-3.5 rounded-xl bg-neutral-950 border border-white/10 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-neutral-300">
+                Live Road Traffic Control
+              </span>
+              <div className="flex items-center gap-1">
+                {(['calm', 'normal', 'fast'] as TrafficSpeedMode[]).map((sp) => (
+                  <button
+                    key={sp}
+                    onClick={() => onChangeTraffic(trafficDensity, sp)}
+                    className={`min-h-[32px] px-2.5 rounded-lg text-[11px] font-bold capitalize border cursor-pointer ${
+                      trafficSpeed === sp
+                        ? 'bg-emerald-600 border-emerald-400 text-white'
+                        : 'bg-white/5 border-white/10 text-neutral-400 hover:bg-white/10'
+                    }`}
+                  >
+                    {sp}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-5 gap-1.5">
+              {([
+                { id: 'off', label: 'Off (0)' },
+                { id: 'light', label: 'Light' },
+                { id: 'normal', label: 'Normal' },
+                { id: 'heavy', label: 'Heavy' },
+                { id: 'rush', label: 'Rush' },
+              ] as { id: TrafficDensity; label: string }[]).map((td) => (
+                <button
+                  key={td.id}
+                  onClick={() => onChangeTraffic(td.id, trafficSpeed)}
+                  className={`min-h-[38px] rounded-lg text-xs font-bold border cursor-pointer ${
+                    trafficDensity === td.id
+                      ? 'bg-amber-500 text-neutral-950 border-amber-300'
+                      : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
+                  }`}
+                >
+                  {td.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <div>
             <div className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2">
-              Driver Controls Quick Reference
+              Controls Quick Reference
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 text-xs">
               {keyBindings.map(([key, action]) => (
                 <div
                   key={key}
@@ -103,37 +160,61 @@ export function PauseModal({
             </div>
           </div>
 
-          {/* Actions */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2">
-            <button
-              onClick={onResume}
-              className="py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Play className="w-4 h-4 fill-current" />
-              Resume
-            </button>
-            <button
-              onClick={onRestart}
-              className="py-3 px-4 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Restart
-            </button>
-            <button
-              onClick={onOpenMap}
-              className="py-3 px-4 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Map className="w-4 h-4" />
-              GPS Map
-            </button>
-            <button
-              onClick={onExitToMenu}
-              className="py-3 px-4 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Home className="w-4 h-4" />
-              Main Menu
-            </button>
-          </div>
+          {confirmExit ? (
+            <div className="p-4 rounded-xl bg-red-950/50 border border-red-500/40 flex flex-wrap items-center justify-between gap-3">
+              <span className="text-xs font-bold text-red-100">
+                Exit current trip and return to Main Menu? Unfinished fares will not be saved.
+              </span>
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  onClick={() => setConfirmExit(false)}
+                  className="min-h-[44px] px-4 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    setConfirmExit(false);
+                    onExitToMenu();
+                  }}
+                  className="min-h-[44px] px-4 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-black cursor-pointer"
+                >
+                  Confirm Exit
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+              <button
+                onClick={onResume}
+                className="min-h-[44px] py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                Resume
+              </button>
+              <button
+                onClick={onRestart}
+                className="min-h-[44px] py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Restart
+              </button>
+              <button
+                onClick={onOpenMap}
+                className="min-h-[44px] py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Map className="w-4 h-4" />
+                GPS Map
+              </button>
+              <button
+                onClick={() => setConfirmExit(true)}
+                className="min-h-[44px] py-2.5 px-4 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Home className="w-4 h-4" />
+                Main Menu
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -157,6 +238,9 @@ interface GameOverModalProps {
   onRetry: () => void;
   onOpenMap: () => void;
   onExitToMenu: () => void;
+  dailyMissions?: DailyMissionsState;
+  onClaimDailyMission?: (missionId: DailyMissionMetric) => void;
+  onClaimDailySweep?: () => void;
 }
 
 export function GameOverModal({
@@ -176,14 +260,17 @@ export function GameOverModal({
   onRetry,
   onOpenMap,
   onExitToMenu,
+  dailyMissions,
+  onClaimDailyMission,
+  onClaimDailySweep,
 }: GameOverModalProps) {
   if (!isOpen) return null;
 
   const netProfit = earnings - fuelSpent - tollsPaid;
 
   return (
-    <div className="fixed inset-0 z-40 bg-neutral-950/85 backdrop-blur-md flex items-center justify-center p-4 select-none">
-      <div className="w-full max-w-lg rounded-2xl bg-neutral-900 border border-white/15 shadow-2xl overflow-hidden text-white">
+    <div className="fixed inset-0 z-40 bg-neutral-950/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto select-none">
+      <div className="w-full max-w-lg rounded-2xl bg-neutral-900 border border-white/15 shadow-2xl overflow-hidden text-white my-auto">
         <div
           className={`px-6 py-5 border-b border-white/10 flex items-center gap-3.5 ${
             isVictory ? 'bg-emerald-950/60' : 'bg-red-950/50'
@@ -266,6 +353,15 @@ export function GameOverModal({
               Current Rank: <strong className="text-white">{newRank}</strong>
             </span>
           </div>
+
+          {dailyMissions && onClaimDailyMission && onClaimDailySweep && (
+            <DailyMissionsPanel
+              dailyMissions={dailyMissions}
+              onClaimMission={onClaimDailyMission}
+              onClaimSweepBonus={onClaimDailySweep}
+              variant="compact"
+            />
+          )}
 
           {hasReplay && onWatchReplay && (
             <button

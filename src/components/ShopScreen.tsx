@@ -136,7 +136,9 @@ export function ShopScreen({
                     </div>
 
                     <h3 className="text-sm font-black text-white">{bus.name}</h3>
-                    <p className="text-[11px] text-neutral-400 mt-0.5">{spec.chassisModel}</p>
+                    <p className="text-[11px] text-neutral-400 mt-0.5">
+                      {spec.chassisModel} · {(spec.weightKg / 1000).toFixed(1)}T · {spec.lengthMeters}m
+                    </p>
                     <p className="text-[11px] text-amber-300/90 mt-1">{bus.tagline}</p>
 
                     <div className="grid grid-cols-2 gap-2 my-3.5 text-[11px]">

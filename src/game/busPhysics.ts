@@ -23,6 +23,7 @@ export interface BusPhysicsState {
   terrainPitch: number;
   suspensionBounce: number;
   isBraking: boolean;
+  serviceBrakePedal: number; // 0..1 analog foot brake
   parkingBrake: boolean;
   clutchPressed: boolean;
   manualGearbox: boolean;
@@ -42,13 +43,15 @@ export interface BusPhysicsState {
   gripFactor: number;
   isDrifting: boolean;
   driftAngle: number;
+  passengersOnboard: number;
+  totalMassKg: number;
 }
 
 export class BusPhysics {
   public state: BusPhysicsState = {
-    x: -74.8,
+    x: -234.8,
     y: 0,
-    z: -155,
+    z: -165,
     speedKmh: 0,
     rpm: 0,
     airPressure: 115,
@@ -66,6 +69,7 @@ export class BusPhysics {
     terrainPitch: 0,
     suspensionBounce: 0,
     isBraking: false,
+    serviceBrakePedal: 0,
     parkingBrake: false,
     clutchPressed: false,
     manualGearbox: false,
@@ -85,11 +89,14 @@ export class BusPhysics {
     gripFactor: 1.0,
     isDrifting: false,
     driftAngle: 0,
+    passengersOnboard: 0,
+    totalMassKg: 11200,
   };
 
   private readonly _forward = new THREE.Vector3();
   private readonly _lateral = new THREE.Vector3();
-  private readonly _wheelbase = 6.2;
+  private _wheelbase = 6.2;
+  private _busBaseMassKg = 11200;
   private readonly _maxSteerAngle = 0.58;
   private _maxForwardSpeed = 80;
   private _speedLimiter80 = true;
@@ -110,7 +117,7 @@ export class BusPhysics {
   private _prevGear: string = 'N';
 
   constructor() {
-    this.reset(-74.8, -155, 0);
+    this.reset(-234.8, -165, 0);
   }
 
   public reset(x: number, z: number, heading: number = 0) {
@@ -134,6 +141,7 @@ export class BusPhysics {
     this.state.terrainPitch = 0;
     this.state.suspensionBounce = 0;
     this.state.isBraking = false;
+    this.state.serviceBrakePedal = 0;
     this.state.parkingBrake = false;
     this.state.isReverse = false;
     this.state.leftIndicator = false;
@@ -143,9 +151,22 @@ export class BusPhysics {
     this.state.doorOpen = false;
     this.state.isDrifting = false;
     this.state.driftAngle = 0;
+    this.state.passengersOnboard = 0;
+    this.state.totalMassKg = this._busBaseMassKg;
     this._smoothedSteerInput = 0;
     this._indicatorEngagedTurnPeak = false;
     this._prevGear = 'N';
+  }
+
+  public setBusSpecs(weightKg: number, lengthMeters: number) {
+    this._busBaseMassKg = Math.max(8500, Math.min(18000, weightKg));
+    this._wheelbase = Math.max(5.5, Math.min(7.8, lengthMeters * 0.54));
+    this.state.totalMassKg = this._busBaseMassKg + this.state.passengersOnboard * 68;
+  }
+
+  public setPassengersCount(count: number) {
+    this.state.passengersOnboard = Math.max(0, Math.min(80, Math.round(count)));
+    this.state.totalMassKg = this._busBaseMassKg + this.state.passengersOnboard * 68;
   }
 
   public toggleIgnition(): boolean {
@@ -240,17 +261,24 @@ export class BusPhysics {
   public setInputs(
     throttle: number,
     steer: number,
-    brake: boolean,
+    brake: boolean | number,
     reverse: boolean,
-    clutch: boolean = false
+    clutch: boolean = false,
+    handbrakeOverride?: boolean
   ) {
     this.state.throttleInput = Math.max(-1, Math.min(1, throttle));
     this.state.steerInput = Math.max(-1, Math.min(1, steer * this._steeringSensitivity));
-    this.state.handbrake = brake;
+    if (typeof brake === 'number') {
+      this.state.serviceBrakePedal = Math.max(0, Math.min(1, brake));
+      this.state.handbrake = !!handbrakeOverride;
+    } else {
+      this.state.serviceBrakePedal = brake ? 1 : 0;
+      this.state.handbrake = handbrakeOverride !== undefined ? handbrakeOverride : brake;
+    }
     this.state.isReverse = reverse;
     this.state.clutchPressed = clutch;
 
-    if (brake || reverse || this.state.throttleInput < -0.1) {
+    if (this.state.serviceBrakePedal > 0.05 || this.state.handbrake || reverse || this.state.throttleInput < -0.1) {
       this.state.cruiseControlSpeed = null;
     }
   }
@@ -434,11 +462,14 @@ export class BusPhysics {
     const slope = (yFront - yBack) / 5.0; // tangent of hill grade
     s.terrainPitch += (Math.atan(slope) - s.terrainPitch) * Math.min(1, 8 * dt);
 
+    const massRatio = 11500 / Math.max(8500, s.totalMassKg);
+    const footBrake = s.serviceBrakePedal > 0.05;
+
     let acceleration = 0;
     const manualAllowsForward = !s.manualGearbox || s.manualGearIndex > 0;
     const manualAllowsReverse = !s.manualGearbox ? s.isReverse : s.manualGearIndex === -1;
 
-    const isManualReverseAccel = manualAllowsReverse && effectiveThrottle > 0 && !s.clutchPressed && !s.parkingBrake;
+    const isManualReverseAccel = manualAllowsReverse && effectiveThrottle > 0 && !s.clutchPressed && !s.parkingBrake && !footBrake;
     const isAutoReverseAccel =
       !s.manualGearbox &&
       this._autoReverse &&
@@ -446,20 +477,24 @@ export class BusPhysics {
       effectiveThrottle < 0 &&
       s.speedKmh <= 0.6 &&
       !s.handbrake &&
-      !s.parkingBrake;
+      !s.parkingBrake &&
+      !footBrake;
 
     s.isBraking =
       s.handbrake ||
       s.parkingBrake ||
+      footBrake ||
       (!s.isReverse && effectiveThrottle < 0 && s.speedKmh > 0.6) ||
       (s.isReverse && effectiveThrottle > 0 && s.speedKmh > 0.6) ||
       (s.isReverse && effectiveThrottle < 0 && s.speedKmh < -0.6);
 
     if (isManualReverseAccel) {
-      acceleration = -12.0 * effectiveThrottle * s.gripFactor * this._torqueBonus;
+      acceleration = -12.0 * effectiveThrottle * s.gripFactor * this._torqueBonus * massRatio;
     } else if (isAutoReverseAccel) {
-      acceleration = 12.0 * effectiveThrottle * s.gripFactor * this._torqueBonus;
-    } else if (!s.isReverse && manualAllowsForward && effectiveThrottle > 0 && !s.handbrake && !s.parkingBrake) {
+      acceleration = 12.0 * effectiveThrottle * s.gripFactor * this._torqueBonus * massRatio;
+    } else if (!s.isReverse && manualAllowsForward && effectiveThrottle > 0 && !s.handbrake && !s.parkingBrake && !footBrake) {
+      const highGearLaunchBog =
+        s.manualGearbox && s.manualGearIndex >= 3 && s.speedKmh < 7 ? 0.34 : 1.0;
       const gearCapFactor = s.manualGearbox
         ? s.manualGearIndex === 1
           ? Math.max(0.1, 1 - s.speedKmh / 16)
@@ -478,19 +513,29 @@ export class BusPhysics {
       const torqueMultiplier =
         s.speedKmh < 14 ? 1.75 : s.speedKmh < 28 ? 1.48 : s.speedKmh < 44 ? 1.24 : s.speedKmh < 64 ? 1.02 : 0.84;
       const tractionMod = s.speedKmh < 22 ? 0.58 + 0.42 * s.gripFactor : 0.82 + 0.18 * s.gripFactor;
-      acceleration = 19.2 * effectiveThrottle * torqueMultiplier * tractionMod * this._torqueBonus * gearCapFactor * healthScale;
+      acceleration =
+        19.2 *
+        effectiveThrottle *
+        torqueMultiplier *
+        tractionMod *
+        this._torqueBonus *
+        gearCapFactor *
+        highGearLaunchBog *
+        healthScale *
+        massRatio;
     }
 
-    // Slope gravity effect + aerodynamic drag
-    const slopeGravity = -slope * 22.0;
+    // Slope gravity effect (heavier bus feels steeper climb / descent!) + aerodynamic drag
+    const slopeGravity = -slope * (22.0 / Math.max(0.72, massRatio));
     const drag = s.speedKmh * 0.13;
     const rollingResistance = s.speedKmh > 0 ? 1.9 : s.speedKmh < 0 ? -1.9 : 0;
 
     let brakeDecel = 0;
     if (s.parkingBrake || s.handbrake) {
-      brakeDecel = 36 * s.gripFactor * this._brakeBonus;
+      brakeDecel = 36 * s.gripFactor * this._brakeBonus * (0.88 + 0.12 * massRatio);
     } else if (s.isBraking) {
-      brakeDecel = 29 * Math.abs(effectiveThrottle) * s.gripFactor * this._brakeBonus;
+      const brakeIntensity = Math.max(s.serviceBrakePedal, Math.abs(effectiveThrottle));
+      brakeDecel = 31 * brakeIntensity * s.gripFactor * this._brakeBonus * (0.84 + 0.16 * massRatio);
     }
 
     if (s.isBraking && !this._wasBraking && Math.abs(s.speedKmh) > 8) {
@@ -595,7 +640,12 @@ export class BusPhysics {
           : 820 + gearRatioNorm * 1620 + Math.abs(effectiveThrottle) * 160;
       s.rpm += (targetRpm - s.rpm) * Math.min(1, 9 * dt);
 
-      const fuelBurn = (0.015 + Math.max(0, effectiveThrottle) * 0.085 + (s.rpm / 2600) * 0.04) * this._fuelSaverMult * dt;
+      const loadFactor = 1.0 + Math.max(0, (s.totalMassKg - 11000) / 14000);
+      const fuelBurn =
+        (0.015 + Math.max(0, effectiveThrottle) * 0.085 + (s.rpm / 2600) * 0.04) *
+        loadFactor *
+        this._fuelSaverMult *
+        dt;
       s.fuelPct = Math.max(0, s.fuelPct - fuelBurn);
       const targetTemp = 79 + (s.rpm - 680) / 140 + (slope > 0.01 ? 5 : 0) + (s.healthPct < 45 ? 12 : 0);
       s.engineTempC += (targetTemp - s.engineTempC) * Math.min(1, 0.35 * dt);
@@ -690,13 +740,15 @@ export class BusPhysics {
     this._roadPhase += Math.abs(speedMs) * dt * 1.4;
     const roadRipple =
       Math.abs(speedMs) > 1.5 ? Math.sin(this._roadPhase) * 0.018 * Math.min(1, Math.abs(speedMs) / 14) : 0;
-    s.suspensionBounce += (roadRipple - s.suspensionBounce) * Math.min(1, 14 * dt);
+    const loadSag = -Math.min(0.05, (s.passengersOnboard / 60) * 0.035);
+    s.suspensionBounce += (roadRipple + loadSag - s.suspensionBounce) * Math.min(1, 14 * dt);
     s.y = getTerrainHeight(s.x, s.z) + s.suspensionBounce;
 
-    const targetRoll = -s.steerAngle * (speedMs / 11.5) * 0.13 + s.driftAngle * 0.09;
+    const loadRollMult = 1.0 + Math.min(0.32, (s.passengersOnboard / 60) * 0.25);
+    const targetRoll = (-s.steerAngle * (speedMs / 11.5) * 0.13 + s.driftAngle * 0.09) * loadRollMult;
     s.rollTilt += (targetRoll - s.rollTilt) * Math.min(1, 7.5 * dt);
 
-    const targetPitch = s.isBraking && absSpd > 2 ? 0.048 : -Math.max(0, effectiveThrottle) * 0.024;
+    const targetPitch = s.isBraking && absSpd > 2 ? 0.052 : -Math.max(0, effectiveThrottle) * 0.024;
     s.pitchTilt += (targetPitch - s.pitchTilt) * Math.min(1, 9.5 * dt);
 
     busAudio.updateEngine(s.speedKmh, effectiveThrottle, s.rpm);

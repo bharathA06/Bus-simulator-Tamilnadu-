@@ -1,9 +1,14 @@
 import { BUS_LIVERIES, PAINT_PALETTE, TimeOfDayId, UPHOLSTERY_STYLES, WeatherId, WHEEL_STYLES } from './constants';
+import { DailyMissionsState, getLocalDateKey, syncDailyMissionsState } from './dailyMissions';
 
 export type GameMode = 'free' | 'career';
-export type GraphicsQuality = 'low' | 'medium' | 'high';
+export type GraphicsQuality = 'low' | 'medium' | 'high' | 'ultra';
 export type SpeedUnit = 'kmh' | 'mph';
 export type ControlScheme = 'both' | 'wasd' | 'arrows';
+export type SteeringControlMode = 'wheel' | 'arrows' | 'tilt';
+export type OrientationPreference = 'auto' | 'landscape' | 'portrait';
+export type TrafficDensity = 'off' | 'light' | 'normal' | 'heavy' | 'rush';
+export type TrafficSpeedMode = 'calm' | 'normal' | 'fast';
 
 export interface BusShopSpec {
   liveryId: string;
@@ -13,6 +18,8 @@ export interface BusShopSpec {
   brakingScore: number;
   comfortScore: number;
   seats: number;
+  weightKg: number;
+  lengthMeters: number;
   chassisModel: string;
   unlockLevel: number;
 }
@@ -34,20 +41,47 @@ export interface BusCustomization {
   wheelStyleId: string;
 }
 
+export interface TripLogEntry {
+  id: string;
+  routeCode: string;
+  routeTitle: string;
+  busName: string;
+  netProfit: number;
+  satisfaction: number;
+  kmDriven: number;
+  success: boolean;
+  timestamp: number;
+}
+
+export interface AchievementDef {
+  id: string;
+  title: string;
+  desc: string;
+  reward: number;
+}
+
 export interface GameSettings {
   graphicsQuality: GraphicsQuality;
-  targetFps: 30 | 60 | 0; // 0 = Uncapped / Native Display
+  targetFps: 30 | 60 | 0; // 0 = Auto / Native Display
   masterVolume: number; // 0..100
   musicVolume: number; // 0..100
   steeringSensitivity: number; // 0.5..1.8
-  defaultCamera: 0 | 1 | 2 | 3 | 4 | 5;
+  cameraSensitivity: number; // 0.5..2.0
+  defaultCamera: 0 | 1 | 2 | 3 | 4 | 5 | 6;
   speedUnit: SpeedUnit;
   autoReverse: boolean;
   manualGearbox: boolean;
   speedLimiter80: boolean;
   controlScheme: ControlScheme;
+  steeringMode: SteeringControlMode;
+  vibrationEnabled: boolean;
+  orientationPreference: OrientationPreference;
+  hudOpacity: number; // 0.65..1.0
+  voiceNavigation: boolean;
   preferredTimeOfDay: TimeOfDayId;
   preferredWeather: WeatherId;
+  trafficDensity: TrafficDensity;
+  trafficSpeed: TrafficSpeedMode;
 }
 
 export interface PlayerProgress {
@@ -67,8 +101,19 @@ export interface PlayerProgress {
   totalTollsPaid: number;
   dirtinessPct: number;
   vehicleHealthPct: number;
+  unlockedAchievements: string[];
+  tripLogs: TripLogEntry[];
+  dailyMissions: DailyMissionsState;
   settings: GameSettings;
 }
+
+export const ACHIEVEMENTS: AchievementDef[] = [
+  { id: 'first_trip', title: 'First Departure', desc: 'Complete your first Tamil Nadu passenger trip', reward: 150 },
+  { id: 'ghat_master', title: 'Ghat Pilot', desc: 'Drive 5+ cumulative km across hills & highways', reward: 250 },
+  { id: 'fleet_owner', title: 'Depot Magnate', desc: 'Own at least 3 Tamil Nadu buses in your fleet', reward: 400 },
+  { id: 'five_star_service', title: '5-Star Conductor', desc: 'Complete a route with 90%+ passenger satisfaction', reward: 300 },
+  { id: 'highway_veteran', title: 'State Highway Veteran', desc: 'Complete 5 scheduled Career trips', reward: 500 },
+];
 
 export const BUS_SHOP_SPECS: BusShopSpec[] = [
   {
@@ -79,6 +124,8 @@ export const BUS_SHOP_SPECS: BusShopSpec[] = [
     brakingScore: 74,
     comfortScore: 72,
     seats: 48,
+    weightKg: 10800,
+    lengthMeters: 11.0,
     chassisModel: 'TNSTC Viking Town 11M',
     unlockLevel: 1,
   },
@@ -90,6 +137,8 @@ export const BUS_SHOP_SPECS: BusShopSpec[] = [
     brakingScore: 78,
     comfortScore: 78,
     seats: 52,
+    weightKg: 11400,
+    lengthMeters: 11.8,
     chassisModel: 'TNSTC District Intercity 12M',
     unlockLevel: 1,
   },
@@ -101,6 +150,8 @@ export const BUS_SHOP_SPECS: BusShopSpec[] = [
     brakingScore: 82,
     comfortScore: 82,
     seats: 50,
+    weightKg: 11800,
+    lengthMeters: 12.0,
     chassisModel: 'TN Express Fast-Track BS6',
     unlockLevel: 1,
   },
@@ -112,6 +163,8 @@ export const BUS_SHOP_SPECS: BusShopSpec[] = [
     brakingScore: 85,
     comfortScore: 86,
     seats: 44,
+    weightKg: 12200,
+    lengthMeters: 12.0,
     chassisModel: 'TNSTC Air-Ride Deluxe 2+2',
     unlockLevel: 2,
   },
@@ -123,6 +176,8 @@ export const BUS_SHOP_SPECS: BusShopSpec[] = [
     brakingScore: 88,
     comfortScore: 90,
     seats: 40,
+    weightKg: 12600,
+    lengthMeters: 12.5,
     chassisModel: 'SETC Ultra Deluxe Cruiser',
     unlockLevel: 2,
   },
@@ -134,6 +189,8 @@ export const BUS_SHOP_SPECS: BusShopSpec[] = [
     brakingScore: 90,
     comfortScore: 94,
     seats: 32,
+    weightKg: 13400,
+    lengthMeters: 13.0,
     chassisModel: 'SETC Twin-Deck AC Sleeper',
     unlockLevel: 3,
   },
@@ -145,6 +202,8 @@ export const BUS_SHOP_SPECS: BusShopSpec[] = [
     brakingScore: 92,
     comfortScore: 95,
     seats: 38,
+    weightKg: 13600,
+    lengthMeters: 13.2,
     chassisModel: 'Kovai Private Semi-Sleeper',
     unlockLevel: 3,
   },
@@ -156,6 +215,8 @@ export const BUS_SHOP_SPECS: BusShopSpec[] = [
     brakingScore: 96,
     comfortScore: 99,
     seats: 44,
+    weightKg: 14500,
+    lengthMeters: 13.8,
     chassisModel: 'B11R Multi-Axle Panorama Luxury',
     unlockLevel: 4,
   },
@@ -166,7 +227,7 @@ export const UPGRADE_CATALOG: UpgradeItem[] = [
     id: 'engine_stage2',
     name: 'Turbo Diesel Stage II Tune',
     category: 'powertrain',
-    description: 'Higher low-end torque for Nilgiri ghat climbs and +16% acceleration.',
+    description: 'Higher low-end torque for Nilgiri & Valparai ghat climbs and +16% acceleration.',
     price: 420,
     statBoost: '+16% Acceleration',
   },
@@ -213,19 +274,27 @@ export const UPGRADE_CATALOG: UpgradeItem[] = [
 ];
 
 export const DEFAULT_SETTINGS: GameSettings = {
-  graphicsQuality: 'high',
+  graphicsQuality: 'medium', // Balanced default for mobile smartphones & tablets
   targetFps: 60,
   masterVolume: 80,
   musicVolume: 45,
   steeringSensitivity: 1.0,
+  cameraSensitivity: 1.0,
   defaultCamera: 0, // First-person Driver Cockpit default!
   speedUnit: 'kmh',
   autoReverse: true,
   manualGearbox: false,
   speedLimiter80: true,
   controlScheme: 'both',
+  steeringMode: 'wheel',
+  vibrationEnabled: true,
+  orientationPreference: 'landscape',
+  hudOpacity: 0.92,
+  voiceNavigation: true,
   preferredTimeOfDay: 'day',
   preferredWeather: 'sunny',
+  trafficDensity: 'normal',
+  trafficSpeed: 'normal',
 };
 
 export const DEFAULT_PROGRESS: PlayerProgress = {
@@ -245,6 +314,9 @@ export const DEFAULT_PROGRESS: PlayerProgress = {
   totalTollsPaid: 0,
   dirtinessPct: 8,
   vehicleHealthPct: 100,
+  unlockedAchievements: [],
+  tripLogs: [],
+  dailyMissions: syncDailyMissionsState(undefined, getLocalDateKey()),
   settings: DEFAULT_SETTINGS,
 };
 
@@ -305,6 +377,9 @@ export function loadPlayerProgress(): PlayerProgress {
           : DEFAULT_PROGRESS.ownedBusIds,
       ownedUpgrades: Array.isArray(parsed.ownedUpgrades) ? parsed.ownedUpgrades : [],
       equippedUpgrades: Array.isArray(parsed.equippedUpgrades) ? parsed.equippedUpgrades : [],
+      unlockedAchievements: Array.isArray(parsed.unlockedAchievements) ? parsed.unlockedAchievements : [],
+      tripLogs: Array.isArray(parsed.tripLogs) ? parsed.tripLogs : [],
+      dailyMissions: syncDailyMissionsState(parsed.dailyMissions, getLocalDateKey()),
       busCustomizations:
         parsed.busCustomizations && typeof parsed.busCustomizations === 'object'
           ? parsed.busCustomizations

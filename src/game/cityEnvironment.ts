@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import {
   BUS_STOPS,
+  CURVED_ROADS,
   HIGHWAY_FACILITIES,
   ROAD_NETWORK,
   TimeOfDayId,
@@ -46,6 +47,14 @@ interface TrafficSignalUnit {
   ewRed: THREE.MeshStandardMaterial;
   ewAmber: THREE.MeshStandardMaterial;
   ewGreen: THREE.MeshStandardMaterial;
+}
+
+interface WorldChunk {
+  cx: number;
+  cz: number;
+  centerX: number;
+  centerZ: number;
+  group: THREE.Group;
 }
 
 function createRoadArrowTexture(type: 'straight' | 'left' | 'right' | 'uturn'): THREE.CanvasTexture {
@@ -179,8 +188,9 @@ export function buildCoimbatoreCity(
   colliders: { minX: number; maxX: number; minZ: number; maxZ: number }[];
   stopTrackers: StopMeshTracker[];
   updatePassengers: (activeStopId: string, isBusStopped: boolean) => void;
-  updateEnvironment: (timeSec: number) => void;
+  updateEnvironment: (timeSec: number, busX?: number, busZ?: number, viewRadius?: number) => void;
   setAtmosphere: (timeOfDay: TimeOfDayId, weather: WeatherId, isNight: boolean) => void;
+  dispose: () => void;
 } {
   const colliders: { minX: number; maxX: number; minZ: number; maxZ: number }[] = [];
   const stopTrackers: StopMeshTracker[] = [];
@@ -188,9 +198,34 @@ export function buildCoimbatoreCity(
   const streetLampBulbMats: THREE.MeshStandardMaterial[] = [];
   const trafficSignals: TrafficSignalUnit[] = [];
   const roadMaterials: THREE.MeshStandardMaterial[] = [];
+  const disposableRootObjects: THREE.Object3D[] = [];
 
-  // 0. Atmospheric Sky Dome sized for the expanded Tamil Nadu map
-  const skyDomeGeom = new THREE.SphereGeometry(680, 32, 20);
+  // Spatial chunk registry for open-world mobile FPS culling
+  const CHUNK_SIZE = 280;
+  const chunksMap = new Map<string, WorldChunk>();
+  const addToChunk = (obj: THREE.Object3D, wx: number, wz: number) => {
+    const cx = Math.floor(wx / CHUNK_SIZE);
+    const cz = Math.floor(wz / CHUNK_SIZE);
+    const key = `${cx}_${cz}`;
+    let chunk = chunksMap.get(key);
+    if (!chunk) {
+      const group = new THREE.Group();
+      scene.add(group);
+      disposableRootObjects.push(group);
+      chunk = {
+        cx,
+        cz,
+        centerX: (cx + 0.5) * CHUNK_SIZE,
+        centerZ: (cz + 0.5) * CHUNK_SIZE,
+        group,
+      };
+      chunksMap.set(key, chunk);
+    }
+    chunk.group.add(obj);
+  };
+
+  // 0. Atmospheric Sky Dome sized for the expanded 1560x1640 Tamil Nadu open world
+  const skyDomeGeom = new THREE.SphereGeometry(1180, 32, 20);
   const skyDomeMat = new THREE.MeshBasicMaterial({
     map: createSkyDomeTexture('day', 'sunny'),
     side: THREE.BackSide,
@@ -199,25 +234,45 @@ export function buildCoimbatoreCity(
   });
   const skyDome = new THREE.Mesh(skyDomeGeom, skyDomeMat);
   scene.add(skyDome);
+  disposableRootObjects.push(skyDome);
 
-  // 1. Displaced Regional Tamil Nadu Terrain (Plains + Nilgiri Hill Ghat Rise)
+  // 1. Displaced Multi-Biome Tamil Nadu Terrain (1560 x 1640)
   const terrainTex = createKonguTerrainTextures(anisotropy);
-  terrainTex.map.repeat.set(36, 38);
-  terrainTex.bumpMap.repeat.set(36, 38);
+  terrainTex.map.repeat.set(56, 58);
+  terrainTex.bumpMap.repeat.set(56, 58);
 
-  const terrainGeom = new THREE.PlaneGeometry(980, 1040, 64, 64);
+  const terrainGeom = new THREE.PlaneGeometry(1560, 1640, 96, 96);
   const tPos = terrainGeom.attributes.position as THREE.BufferAttribute;
+  const colors = new Float32Array(tPos.count * 3);
+  const colPlain = new THREE.Color(0xcbd5b1);
+  const colGhat = new THREE.Color(0x6b9e78);
+  const colCoast = new THREE.Color(0xe7d8b1);
+  const colTemp = new THREE.Color();
+
   for (let i = 0; i < tPos.count; i++) {
     const wx = tPos.getX(i);
     const wz = -tPos.getY(i);
-    tPos.setZ(i, getTerrainHeight(wx, wz) - 0.08);
+    const h = getTerrainHeight(wx, wz);
+    tPos.setZ(i, h - 0.08);
+
+    const hillBlend = Math.min(1, h / 11.5);
+    const coastBlend = Math.max(
+      0,
+      Math.min(1, Math.max((wx - 430) / 170, (wz - 470) / 170))
+    );
+    colTemp.copy(colPlain).lerp(colGhat, hillBlend).lerp(colCoast, coastBlend * 0.72);
+    colors[i * 3 + 0] = colTemp.r;
+    colors[i * 3 + 1] = colTemp.g;
+    colors[i * 3 + 2] = colTemp.b;
   }
+  terrainGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   terrainGeom.computeVertexNormals();
 
   const terrainMat = new THREE.MeshStandardMaterial({
     map: terrainTex.map,
     bumpMap: terrainTex.bumpMap,
     bumpScale: 0.08,
+    vertexColors: true,
     roughness: 0.94,
     metalness: 0.02,
   });
@@ -225,20 +280,22 @@ export function buildCoimbatoreCity(
   terrain.rotation.x = -Math.PI / 2;
   terrain.receiveShadow = true;
   scene.add(terrain);
+  disposableRootObjects.push(terrain);
 
-  // 2. Western Ghats & Nilgiri Mountain Ridges (NW Corridor around Coonoor & Ooty)
+  // 2. Western Ghats, Nilgiris, Anaimalai/Valparai & Palani-Kodaikanal Mountain Ridges
   const mountainMatFar = new THREE.MeshStandardMaterial({ color: 0x1e3a5f, roughness: 0.95 });
   const mountainMatNear = new THREE.MeshStandardMaterial({ color: 0x1e4635, roughness: 0.92 });
   const mountainSpecs = [
-    { x: -340, z: -360, r: 95, h: 85, far: true },
-    { x: -290, z: -395, r: 82, h: 72, far: true },
-    { x: -390, z: -220, r: 90, h: 80, far: true },
-    { x: -380, z: -60, r: 85, h: 68, far: true },
-    { x: -360, z: 120, r: 78, h: 60, far: true },
-    { x: -330, z: 270, r: 72, h: 55, far: true },
-    { x: -295, z: -200, r: 44, h: 36, far: false },
-    { x: -175, z: -215, r: 40, h: 32, far: false },
-    { x: -185, z: -340, r: 46, h: 38, far: false },
+    { x: -640, z: -600, r: 125, h: 110, far: true },
+    { x: -570, z: -645, r: 105, h: 92, far: true },
+    { x: -655, z: -380, r: 112, h: 96, far: true },
+    { x: -650, z: -90, r: 95, h: 78, far: true },
+    { x: -645, z: 220, r: 105, h: 88, far: true },
+    { x: -655, z: 440, r: 110, h: 95, far: true },
+    { x: -555, z: -395, r: 52, h: 42, far: false },
+    { x: -375, z: -430, r: 48, h: 38, far: false },
+    { x: -590, z: 365, r: 44, h: 36, far: false },
+    { x: -135, z: 375, r: 46, h: 34, far: false },
   ];
   mountainSpecs.forEach((m) => {
     const hill = new THREE.Mesh(
@@ -248,10 +305,10 @@ export function buildCoimbatoreCity(
     const groundY = getTerrainHeight(m.x, m.z);
     hill.position.set(m.x, groundY + m.h * 0.42, m.z);
     hill.scale.set(1.2, 1, 1.45);
-    scene.add(hill);
+    addToChunk(hill, m.x, m.z);
   });
 
-  // 3. Bay of Bengal / Indian Ocean Coastline (East & South) + Cauvery & Ukkadam Lakes
+  // 3. Bay of Bengal / Indian Ocean Coastline (East & South) + Cauvery & Vaigai Rivers
   const waterMat = new THREE.MeshPhysicalMaterial({
     color: 0x0369a1,
     roughness: 0.08,
@@ -260,24 +317,34 @@ export function buildCoimbatoreCity(
     clearcoatRoughness: 0.05,
   });
 
-  const eastOcean = new THREE.Mesh(new THREE.PlaneGeometry(240, 1020), waterMat);
+  const eastOcean = new THREE.Mesh(new THREE.PlaneGeometry(340, 1680), waterMat);
   eastOcean.rotation.x = -Math.PI / 2;
-  eastOcean.position.set(420, -0.02, 0);
+  eastOcean.position.set(710, -0.02, 0);
   scene.add(eastOcean);
+  disposableRootObjects.push(eastOcean);
 
-  const southOcean = new THREE.Mesh(new THREE.PlaneGeometry(1020, 240), waterMat);
+  const southOcean = new THREE.Mesh(new THREE.PlaneGeometry(1680, 340), waterMat);
   southOcean.rotation.x = -Math.PI / 2;
-  southOcean.position.set(0, -0.02, 460);
+  southOcean.position.set(0, -0.02, 730);
   scene.add(southOcean);
+  disposableRootObjects.push(southOcean);
 
-  // Cauvery River Channel near x = 20..140, z = 0
-  const cauveryRiver = new THREE.Mesh(new THREE.PlaneGeometry(34, 460), waterMat);
+  // Cauvery River Channel near Z = 0, X = -80..420
+  const cauveryRiver = new THREE.Mesh(new THREE.PlaneGeometry(36, 520), waterMat);
   cauveryRiver.rotation.x = -Math.PI / 2;
   cauveryRiver.rotation.z = Math.PI / 2;
-  cauveryRiver.position.set(125, -0.02, 0);
+  cauveryRiver.position.set(140, -0.02, 42);
   scene.add(cauveryRiver);
+  disposableRootObjects.push(cauveryRiver);
 
-  // 4. PBR 20m Divided 4-Lane Tamil Nadu Highways (Smoothly vertex-displaced for Ghat Climbs)
+  // Pamban Sea Channel crossing under Rameswaram bridge (X=480, Z=130)
+  const pambanChannel = new THREE.Mesh(new THREE.PlaneGeometry(160, 44), waterMat);
+  pambanChannel.rotation.x = -Math.PI / 2;
+  pambanChannel.position.set(510, -0.02, 130);
+  scene.add(pambanChannel);
+  disposableRootObjects.push(pambanChannel);
+
+  // 4. PBR 20m Divided 4-Lane Tamil Nadu Highways (5x5 Network)
   const asphaltTex = createAsphaltTextures(anisotropy);
   const roadMat = new THREE.MeshStandardMaterial({
     map: asphaltTex.map,
@@ -295,6 +362,14 @@ export function buildCoimbatoreCity(
 
   const lineMat = new THREE.MeshStandardMaterial({
     color: 0xf8fafc,
+    roughness: 0.55,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  });
+
+  const ghatEdgeLineMat = new THREE.MeshStandardMaterial({
+    color: 0xfacc15,
     roughness: 0.55,
     polygonOffset: true,
     polygonOffsetFactor: -1,
@@ -356,7 +431,7 @@ export function buildCoimbatoreCity(
     segMat.map = segTexMap;
     roadMaterials.push(segMat);
 
-    const segCount = 48;
+    const segCount = 80;
     const roadGeom = isVertical
       ? new THREE.PlaneGeometry(roadW, length, 4, segCount)
       : new THREE.PlaneGeometry(length, roadW, segCount, 4);
@@ -374,11 +449,12 @@ export function buildCoimbatoreCity(
     road.position.set(centerX, 0, centerZ);
     road.receiveShadow = true;
     scene.add(road);
+    disposableRootObjects.push(road);
 
     const startAlong = isVertical ? centerZ - length / 2 : centerX - length / 2;
     const endAlong = isVertical ? centerZ + length / 2 : centerX + length / 2;
 
-    for (let pos = startAlong + 5; pos < endAlong - 5; pos += 10) {
+    for (let pos = startAlong + 5; pos < endAlong - 5; pos += 12) {
       const checkX = isVertical ? centerX : pos;
       const checkZ = isVertical ? pos : centerZ;
       const inIntersection =
@@ -407,22 +483,21 @@ export function buildCoimbatoreCity(
         isVertical ? centerX - halfRoad - 0.25 : pos,
         gy + 0.12,
         isVertical ? pos : centerZ - halfRoad - 0.25,
-        isVertical ? 0.55 : 10,
+        isVertical ? 0.55 : 12,
         0.24,
-        isVertical ? 10 : 0.55
+        isVertical ? 12 : 0.55
       );
       pushBoxMatrix(
         curbMatrices,
         isVertical ? centerX + halfRoad + 0.25 : pos,
         gy + 0.12,
         isVertical ? pos : centerZ + halfRoad + 0.25,
-        isVertical ? 0.55 : 10,
+        isVertical ? 0.55 : 12,
         0.24,
-        isVertical ? 10 : 0.55
+        isVertical ? 12 : 0.55
       );
 
       if (!isMedianGap(checkX, checkZ)) {
-        // Skip median inside toll plazas so buses can enter booths smoothly
         const nearToll = HIGHWAY_FACILITIES.some(
           (f) => f.type === 'toll' && Math.hypot(checkX - f.x, checkZ - f.z) < 8
         );
@@ -432,30 +507,132 @@ export function buildCoimbatoreCity(
             checkX,
             gy + 0.13,
             checkZ,
-            isVertical ? 1.1 : 9.6,
+            isVertical ? 1.1 : 11.6,
             0.26,
-            isVertical ? 9.6 : 1.1
+            isVertical ? 11.6 : 1.1
           );
 
-          if (Math.abs(Math.round(pos)) % 20 < 10) {
+          if (Math.abs(Math.round(pos)) % 24 < 12) {
             pushBoxMatrix(bollardMatrices, checkX, gy + 0.52, checkZ, 1, 1, 1);
           } else {
             pushBoxMatrix(shrubMatrices, checkX, gy + 0.48, checkZ, 1, 0.75, 1);
           }
 
           colliders.push({
-            minX: checkX - (isVertical ? 0.42 : 4.8),
-            maxX: checkX + (isVertical ? 0.42 : 4.8),
-            minZ: checkZ - (isVertical ? 4.8 : 0.42),
-            maxZ: checkZ + (isVertical ? 4.8 : 0.42),
+            minX: checkX - (isVertical ? 0.42 : 5.8),
+            maxX: checkX + (isVertical ? 0.42 : 5.8),
+            minZ: checkZ - (isVertical ? 5.8 : 0.42),
+            maxZ: checkZ + (isVertical ? 5.8 : 0.42),
           });
         }
       }
     }
   };
 
-  ROAD_NETWORK.verticalX.forEach((vx) => createDividedRoad(vx, 0, 760, true));
-  ROAD_NETWORK.horizontalZ.forEach((hz) => createDividedRoad(0, hz, 680, false));
+  ROAD_NETWORK.verticalX.forEach((vx) => createDividedRoad(vx, 0, 1280, true));
+  ROAD_NETWORK.horizontalZ.forEach((hz) => createDividedRoad(0, hz, 1200, false));
+
+  // 4B. Scenic Curved Mountain Hairpin Roads (Ooty, Valparai, Kodaikanal)
+  const guardrailMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.65, roughness: 0.4 });
+  const guardrailPostMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.7, roughness: 0.45 });
+
+  CURVED_ROADS.forEach((cr) => {
+    const curvePts = cr.points.map((p) => new THREE.Vector3(p.x, 0, p.z));
+    const curve = new THREE.CatmullRomCurve3(curvePts, false, 'catmullrom', 0.42);
+    const totalSamples = Math.max(48, cr.points.length * 14);
+    const halfW = cr.width / 2;
+
+    const positions: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+
+    const edgeLeftPts: THREE.Vector3[] = [];
+    const edgeRightPts: THREE.Vector3[] = [];
+    let accumLen = 0;
+    let prevCenter: THREE.Vector3 | null = null;
+
+    for (let i = 0; i <= totalSamples; i++) {
+      const t = i / totalSamples;
+      const pt = curve.getPoint(t);
+      const tan = curve.getTangent(t).normalize();
+      if (prevCenter) accumLen += pt.distanceTo(prevCenter);
+      prevCenter = pt.clone();
+
+      // Perpendicular right vector in XZ plane
+      const perpX = -tan.z;
+      const perpZ = tan.x;
+
+      const lx = pt.x - perpX * halfW;
+      const lz = pt.z - perpZ * halfW;
+      const rx = pt.x + perpX * halfW;
+      const rz = pt.z + perpZ * halfW;
+
+      const ly = getTerrainHeight(lx, lz) + 0.038;
+      const ry = getTerrainHeight(rx, rz) + 0.038;
+
+      positions.push(lx, ly, lz, rx, ry, rz);
+      uvs.push(0, accumLen / 12, 1, accumLen / 12);
+
+      edgeLeftPts.push(new THREE.Vector3(lx, ly, lz));
+      edgeRightPts.push(new THREE.Vector3(rx, ry, rz));
+
+      if (i < totalSamples) {
+        const base = i * 2;
+        indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
+      }
+    }
+
+    const ribbonGeom = new THREE.BufferGeometry();
+    ribbonGeom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    ribbonGeom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    ribbonGeom.setIndex(indices);
+    ribbonGeom.computeVertexNormals();
+
+    const ghatTexMap = asphaltTex.map.clone();
+    ghatTexMap.needsUpdate = true;
+    ghatTexMap.repeat.set(0.9, 1);
+    const ghatMat = roadMat.clone();
+    ghatMat.map = ghatTexMap;
+    ghatMat.side = THREE.DoubleSide;
+    roadMaterials.push(ghatMat);
+
+    const ghatMesh = new THREE.Mesh(ribbonGeom, ghatMat);
+    ghatMesh.receiveShadow = true;
+    scene.add(ghatMesh);
+    disposableRootObjects.push(ghatMesh);
+
+    // Ghat dashed centerlines & yellow guardrail posts
+    for (let i = 2; i < totalSamples - 2; i += 4) {
+      const pL = edgeLeftPts[i];
+      const pR = edgeRightPts[i];
+      const pNextL = edgeLeftPts[i + 1];
+      const pNextR = edgeRightPts[i + 1];
+      const midX = (pL.x + pR.x) * 0.5;
+      const midZ = (pL.z + pR.z) * 0.5;
+      const nextMidX = (pNextL.x + pNextR.x) * 0.5;
+      const nextMidZ = (pNextL.z + pNextR.z) * 0.5;
+      const yaw = Math.atan2(nextMidX - midX, nextMidZ - midZ);
+      const midY = getTerrainHeight(midX, midZ) + 0.055;
+
+      const centerDash = new THREE.Mesh(new THREE.PlaneGeometry(0.24, 3.0), ghatEdgeLineMat);
+      centerDash.rotation.x = -Math.PI / 2;
+      centerDash.rotation.z = -yaw;
+      centerDash.position.set(midX, midY, midZ);
+      addToChunk(centerDash, midX, midZ);
+
+      if (i % 8 === 2) {
+        [pL, pR].forEach((edgePt) => {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.72, 0.18), guardrailPostMat);
+          post.position.set(edgePt.x, edgePt.y + 0.36, edgePt.z);
+          const rail = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.24, 3.4), guardrailMat);
+          rail.position.set(edgePt.x, edgePt.y + 0.58, edgePt.z);
+          rail.rotation.y = yaw;
+          addToChunk(post, edgePt.x, edgePt.z);
+          addToChunk(rail, edgePt.x, edgePt.z);
+        });
+      }
+    }
+  });
 
   const addInstancedBatch = (
     geom: THREE.BufferGeometry,
@@ -473,6 +650,7 @@ export function buildCoimbatoreCity(
     im.castShadow = castShadow;
     im.receiveShadow = receiveShadow;
     scene.add(im);
+    disposableRootObjects.push(im);
   };
 
   addInstancedBatch(new THREE.PlaneGeometry(1, 1), lineMat, dashMatrices);
@@ -501,7 +679,7 @@ export function buildCoimbatoreCity(
     m.rotation.x = -Math.PI / 2;
     m.rotation.z = rotY;
     m.position.set(x, getTerrainHeight(x, z) + 0.04, z);
-    scene.add(m);
+    addToChunk(m, x, z);
   };
 
   const uturnSignTex = createUTurnSignTexture();
@@ -512,7 +690,7 @@ export function buildCoimbatoreCity(
     emissiveIntensity: 0.35,
   });
   const speed60Tex = createSpeedLimitSignTexture('60');
-  const speed85Tex = createSpeedLimitSignTexture('85');
+  const speed80Tex = createSpeedLimitSignTexture('80');
   const speed45Tex = createSpeedLimitSignTexture('45');
   const speed60Mat = new THREE.MeshStandardMaterial({
     map: speed60Tex,
@@ -520,10 +698,10 @@ export function buildCoimbatoreCity(
     emissiveMap: speed60Tex,
     emissiveIntensity: 0.25,
   });
-  const speed85Mat = new THREE.MeshStandardMaterial({
-    map: speed85Tex,
+  const speed80Mat = new THREE.MeshStandardMaterial({
+    map: speed80Tex,
     emissive: 0xffffff,
-    emissiveMap: speed85Tex,
+    emissiveMap: speed80Tex,
     emissiveIntensity: 0.25,
   });
   const speed45Mat = new THREE.MeshStandardMaterial({
@@ -545,7 +723,8 @@ export function buildCoimbatoreCity(
       post.position.set(x, gy + 1.4, z - 7);
       const sign = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.85, 0.08), uturnSignMat);
       sign.position.set(x, gy + 2.6, z - 7);
-      scene.add(post, sign);
+      addToChunk(post, x, z);
+      addToChunk(sign, x, z);
     } else {
       placePavementArrow(x - 8, z - 2.6, -Math.PI / 2, uturnTex);
       placePavementArrow(x + 8, z + 2.6, Math.PI / 2, uturnTex);
@@ -553,31 +732,34 @@ export function buildCoimbatoreCity(
       post.position.set(x - 7, gy + 1.4, z);
       const sign = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.85, 0.85), uturnSignMat);
       sign.position.set(x - 7, gy + 2.6, z);
-      scene.add(post, sign);
+      addToChunk(post, x, z);
+      addToChunk(sign, x, z);
     }
   };
 
   ROAD_NETWORK.verticalX.forEach((vx) => {
     ROAD_NETWORK.uturnBaysVerticalZ.forEach((uz) => {
-      const skip = HIGHWAY_FACILITIES.some((f) => Math.hypot(vx - f.x, uz - f.z) < 16);
+      const skip = HIGHWAY_FACILITIES.some((f) => Math.hypot(vx - f.x, uz - f.z) < 18);
       if (!skip) placeUTurnBayMarkers(vx, uz, true);
     });
   });
   ROAD_NETWORK.horizontalZ.forEach((hz) => {
     ROAD_NETWORK.uturnBaysHorizontalX.forEach((ux) => {
-      const skip = HIGHWAY_FACILITIES.some((f) => Math.hypot(ux - f.x, hz - f.z) < 16);
+      const skip = HIGHWAY_FACILITIES.some((f) => Math.hypot(ux - f.x, hz - f.z) < 18);
       if (!skip) placeUTurnBayMarkers(ux, hz, false);
     });
   });
 
-  // Tamil Nadu Regional Speed Limit Signs (45 Hill / 60 City / 85 Highway)
+  // Tamil Nadu Regional Speed Limit Signs (45 Hill / 60 City / 80 Highway)
   [
-    { x: -69.2, z: -135, rot: 0, mat: speed60Mat },
-    { x: -90.8, z: -70, rot: Math.PI, mat: speed85Mat },
-    { x: -229.2, z: -140, rot: Math.PI, mat: speed45Mat },
-    { x: 90.8, z: -45, rot: 0, mat: speed85Mat },
-    { x: 229.2, z: -195, rot: Math.PI, mat: speed60Mat },
-    { x: 69.2, z: 165, rot: 0, mat: speed60Mat },
+    { x: -229.2, z: -135, rot: 0, mat: speed60Mat },
+    { x: -250.8, z: -310, rot: Math.PI, mat: speed80Mat },
+    { x: -469.2, z: -315, rot: Math.PI, mat: speed45Mat },
+    { x: 10.8, z: -45, rot: 0, mat: speed80Mat },
+    { x: 469.2, z: -395, rot: Math.PI, mat: speed60Mat },
+    { x: 229.2, z: 290, rot: 0, mat: speed60Mat },
+    { x: -469.2, z: 295, rot: 0, mat: speed45Mat },
+    { x: 10.8, z: 340, rot: 0, mat: speed80Mat },
   ].forEach(({ x, z, rot, mat }) => {
     const gy = getTerrainHeight(x, z);
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 3.2, 8), poleMat);
@@ -586,10 +768,11 @@ export function buildCoimbatoreCity(
     board.rotation.x = Math.PI / 2;
     board.rotation.z = rot;
     board.position.set(x, gy + 3.1, z);
-    scene.add(post, board);
+    addToChunk(post, x, z);
+    addToChunk(board, x, z);
   });
 
-  // 5. All 16 Intersections: Zebra Crossings, Stop Lines, Pavement Arrows & Synced 4-Way Signals
+  // 5. All 25 Intersections: Zebra Crossings, Stop Lines, Pavement Arrows & Synced 4-Way Signals
   const zebraMatrices: THREE.Matrix4[] = [];
   const lensGeom = new THREE.SphereGeometry(0.16, 10, 10);
 
@@ -659,7 +842,7 @@ export function buildCoimbatoreCity(
         gL2.position.set(-3.2, 4.15, -0.22);
 
         g.add(post, arm, box, rL, aL, gL, rL2, aL2, gL2);
-        scene.add(g);
+        addToChunk(g, px, pz);
       };
 
       createSignalPole(ix + 11.2, iz - 11.2, 0, nsRed, nsAmber, nsGreen);
@@ -695,7 +878,7 @@ export function buildCoimbatoreCity(
     ctx.lineWidth = 10;
     ctx.strokeRect(10, 10, 1004, 236);
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 46px "Plus Jakarta Sans", sans-serif';
+    ctx.font = 'bold 44px "Plus Jakarta Sans", sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(signText, 512, 105);
     ctx.fillStyle = '#fde047';
@@ -720,13 +903,14 @@ export function buildCoimbatoreCity(
     boardBack.rotation.y = Math.PI;
 
     gantry.add(leftPost, rightPost, truss, boardFront, boardBack);
-    scene.add(gantry);
+    addToChunk(gantry, gx, gz);
   };
 
-  createHighwayGantry(-80, -135, 'NH-544  ▲  SALEM / OOTY  |  UKKADAM  ▼', 'தமிழ்நாடு நெடுஞ்சாலை • இடதுபுறம் செல்லவும்');
-  createHighwayGantry(80, -35, 'ERODE  ▲  |  TRICHY  |  MADURAI  ▼', 'காவிரி பாலம் • SPEED LIMIT 80 KM/H');
-  createHighwayGantry(240, -135, 'CHENNAI CMBT  ▲  |  RAMESWARAM  ▼', 'சென்னை – ராமேஸ்வரம் நெடுஞ்சாலை');
-  createHighwayGantry(-155, -100, 'METTUPALAYAM  ⬅  |  OOTY GHAT ROAD ➔', 'நீலகிரி மலைப்பாதை • 45 KM/H MAX', Math.PI / 2);
+  createHighwayGantry(-240, -195, 'NH-544  ▲  SALEM / OOTY  |  COIMBATORE  ▼', 'தமிழ்நாடு நெடுஞ்சாலை • இடதுபுறம் செல்லவும்');
+  createHighwayGantry(0, -195, 'ERODE  ▲  |  DINDIGUL  |  TIRUNELVELI  ▼', 'காவிரி பாலம் • SPEED LIMIT 80 KM/H');
+  createHighwayGantry(480, -370, 'CHENNAI CMBT  ▲  |  RAMESWARAM  ▼', 'சென்னை – ராமேஸ்வரம் நெடுஞ்சாலை');
+  createHighwayGantry(-275, -260, 'METTUPALAYAM  ⬅  |  OOTY 36-HAIRPIN GHAT ➔', 'நீலகிரி மலைப்பாதை • 40 KM/H MAX', Math.PI / 2);
+  createHighwayGantry(240, 220, 'TRICHY  ▲  |  MADURAI MEENAKSHI  ▼', 'மதுரை மாட்டுத்தாவணி • பெரியார் நிலையம்');
 
   // 6. Highway Infrastructure: Tolls, Petrol Bunks, Rail Crossings, Bridges, Police & Construction
   const bridgeConcreteMat = new THREE.MeshStandardMaterial({ color: 0xcbd5e1, roughness: 0.72 });
@@ -736,42 +920,48 @@ export function buildCoimbatoreCity(
       const toll = createTollPlaza();
       toll.position.set(fac.x, gy, fac.z);
       if (fac.axis === 'horizontal') toll.rotation.y = Math.PI / 2;
-      scene.add(toll);
+      addToChunk(toll, fac.x, fac.z);
     } else if (fac.type === 'petrol') {
-      const bunk = createPetrolBunk(fac.id === 'petrol_kovai' ? 'BHARAT PETROLEUM' : 'INDIANOIL KAVERI');
+      const bunk = createPetrolBunk(
+        fac.id === 'petrol_kovai'
+          ? 'BHARAT PETROLEUM'
+          : fac.id === 'petrol_trichy'
+          ? 'INDIANOIL KAVERI'
+          : 'HP HIGHWAY DIESEL'
+      );
       bunk.position.set(fac.x + 8, gy, fac.z);
       bunk.rotation.y = -Math.PI / 2;
-      scene.add(bunk);
+      addToChunk(bunk, fac.x, fac.z);
     } else if (fac.type === 'rail_crossing') {
       const rail = createRailwayCrossing();
       rail.position.set(fac.x, gy, fac.z);
       if (fac.axis === 'vertical') rail.rotation.y = Math.PI / 2;
-      scene.add(rail);
+      addToChunk(rail, fac.x, fac.z);
     } else if (fac.type === 'bridge') {
       [-10.6, 10.6].forEach((offset) => {
-        const wall = new THREE.Mesh(new THREE.BoxGeometry(0.65, 1.35, 34), bridgeConcreteMat);
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(0.65, 1.35, 42), bridgeConcreteMat);
         wall.position.set(fac.x + offset, gy + 0.67, fac.z);
         wall.castShadow = true;
-        scene.add(wall);
+        addToChunk(wall, fac.x, fac.z);
       });
     } else if (fac.type === 'rest_stop') {
       const tea = createTeaStall();
       tea.position.set(fac.x, gy, fac.z - 6.5);
-      scene.add(tea);
+      addToChunk(tea, fac.x, fac.z);
     } else if (fac.type === 'police_check') {
       const police = createPoliceCheckpost();
       police.position.set(fac.x, gy, fac.z);
       if (fac.axis === 'horizontal') police.rotation.y = Math.PI / 2;
-      scene.add(police);
+      addToChunk(police, fac.x, fac.z);
     } else if (fac.type === 'construction') {
       const work = createConstructionZone();
       work.position.set(fac.x, gy, fac.z);
       if (fac.axis === 'vertical') work.rotation.y = Math.PI / 2;
-      scene.add(work);
+      addToChunk(work, fac.x, fac.z);
     }
   });
 
-  // 7. Commercial Buildings, Tea Stalls & Landmarks across Tamil Nadu Cities
+  // 7. Commercial Buildings, Tea Stalls & Iconic Landmarks across Tamil Nadu Cities
   const buildingColors = ['#cbd5e1', '#e2e8f0', '#d6c7b2', '#94a3b8', '#e5d3b3', '#cbd5e1'];
   const shopNames = [
     'ஸ்ரீ அன்னபூர்ணா • SREE ANNAPOORNA',
@@ -810,15 +1000,15 @@ export function buildCoimbatoreCity(
     bldg.position.set(x, gy + h / 2, z);
     bldg.castShadow = true;
     bldg.receiveShadow = true;
-    scene.add(bldg);
+    addToChunk(bldg, x, z);
 
     const parapet = new THREE.Mesh(new THREE.BoxGeometry(w + 0.6, 0.75, d + 0.6), roofDetailMat);
     parapet.position.set(x, gy + h + 0.35, z);
-    scene.add(parapet);
+    addToChunk(parapet, x, z);
 
     const waterTank = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 2.2, 12), tankMat);
     waterTank.position.set(x - w * 0.25, gy + h + 1.4, z - d * 0.2);
-    scene.add(waterTank);
+    addToChunk(waterTank, x, z);
 
     colliders.push({
       minX: x - w / 2 - 0.5,
@@ -854,44 +1044,48 @@ export function buildCoimbatoreCity(
         })
       );
       board.position.set(x, gy + 3.8, z + d / 2 + 0.08);
-      scene.add(board);
+      addToChunk(board, x, z);
     }
   };
 
-  // Coimbatore Hub Blocks (around X=-80, Z=-100..+100)
-  placeBuilding(-38, -155, 34, 18, 28, buildingColors[0], 0);
-  placeBuilding(-122, -155, 32, 16, 26, buildingColors[1], 1);
-  placeBuilding(-38, 45, 36, 19, 32, buildingColors[2], 0);
-  placeBuilding(-122, 45, 34, 15, 28, buildingColors[3], 4);
+  // Coimbatore Hub Blocks (X=-240, Z=-200..+120)
+  placeBuilding(-196, -165, 34, 18, 28, buildingColors[0], 0);
+  placeBuilding(-284, -165, 32, 16, 26, buildingColors[1], 1);
+  placeBuilding(-196, 65, 36, 19, 32, buildingColors[2], 0);
+  placeBuilding(-284, 65, 34, 15, 28, buildingColors[3], 4);
 
   // Tiruppur / Erode / Salem Blocks
-  placeBuilding(0, -145, 38, 17, 26, buildingColors[4], 1);
-  placeBuilding(124, -155, 34, 16, 30, buildingColors[0], 5);
-  placeBuilding(-124, -235, 34, 18, 28, buildingColors[2], 4);
+  placeBuilding(-75, -296, 36, 17, 26, buildingColors[4], 1);
+  placeBuilding(44, -165, 34, 16, 30, buildingColors[0], 5);
+  placeBuilding(-286, -425, 36, 18, 28, buildingColors[2], 4);
 
-  // Chennai CMBT & Tambaram Complex (NE corridor X=240, Z=-240..-150)
-  placeBuilding(194, -225, 42, 26, 38, buildingColors[1], 2);
-  placeBuilding(284, -225, 38, 22, 34, buildingColors[3], 2);
-  placeBuilding(196, -165, 36, 18, 28, buildingColors[5], 4);
+  // Chennai CMBT & Tambaram Complex (X=480, Z=-460..-320)
+  placeBuilding(434, -440, 42, 26, 38, buildingColors[1], 2);
+  placeBuilding(526, -440, 38, 22, 34, buildingColors[3], 2);
+  placeBuilding(436, -335, 36, 18, 28, buildingColors[5], 4);
 
-  // Trichy & Madurai Blocks
-  placeBuilding(126, 48, 36, 19, 30, buildingColors[0], 5);
-  placeBuilding(38, 215, 34, 16, 32, buildingColors[4], 3);
-  placeBuilding(124, 215, 34, 18, 30, buildingColors[2], 3);
+  // Trichy, Dindigul, Madurai & Tirunelveli Blocks
+  placeBuilding(286, -165, 36, 19, 30, buildingColors[0], 5);
+  placeBuilding(46, 115, 32, 15, 28, buildingColors[4], 4);
+  placeBuilding(115, 220, 36, 18, 30, buildingColors[4], 3);
+  placeBuilding(194, 335, 34, 18, 30, buildingColors[2], 3);
+  placeBuilding(48, 455, 34, 16, 28, buildingColors[1], 5);
 
-  // Ooty / Coonoor Hill Cottages (Sloped NW)
-  placeBuilding(-196, -215, 24, 10, 20, '#fde68a');
-  placeBuilding(-198, -155, 22, 9, 18, '#fed7aa');
+  // Ooty / Coonoor / Valparai / Kodaikanal Hill Cottages
+  placeBuilding(-436, -445, 24, 10, 20, '#fde68a');
+  placeBuilding(-526, -345, 22, 9, 18, '#fed7aa');
+  placeBuilding(-555, 560, 24, 10, 18, '#fde68a');
+  placeBuilding(-115, 255, 24, 9, 18, '#fed7aa');
 
   // Historic Coimbatore Clock Tower near Town Hall / Ukkadam
   const clockTower = createClockTower();
-  clockTower.position.set(-46, getTerrainHeight(-46, -42), -42);
-  scene.add(clockTower);
-  colliders.push({ minX: -51, maxX: -41, minZ: -47, maxZ: -37 });
+  clockTower.position.set(-206, getTerrainHeight(-206, -45), -45);
+  addToChunk(clockTower, -206, -45);
+  colliders.push({ minX: -211, maxX: -201, minZ: -50, maxZ: -40 });
 
-  // Stepped Madurai Meenakshi Temple Gopuram Landmark (east of Periyar Bus Stand)
+  // Stepped Madurai Meenakshi Temple Gopuram Landmark (East of Periyar Bus Stand)
   const gopuram = new THREE.Group();
-  gopuram.position.set(145, 0, 232);
+  gopuram.position.set(285, getTerrainHeight(285, 335), 335);
   const gopTierColors = [0xd97706, 0x059669, 0xdc2626, 0x0284c7, 0xfacc15];
   for (let tier = 0; tier < 5; tier++) {
     const tw = 12 - tier * 1.9;
@@ -905,10 +1099,31 @@ export function buildCoimbatoreCity(
     tMesh.castShadow = true;
     gopuram.add(tMesh);
   }
-  scene.add(gopuram);
-  colliders.push({ minX: 138, maxX: 152, minZ: 227, maxZ: 237 });
+  addToChunk(gopuram, 285, 335);
+  colliders.push({ minX: 278, maxX: 292, minZ: 330, maxZ: 340 });
 
-  // 8. All 17 Kerbside Tamil Nadu Bus Terminals & Animated Passengers
+  // Kanyakumari Vivekananda Rock Memorial Silhouette offshore
+  const rockMemorial = new THREE.Group();
+  rockMemorial.position.set(165, 0, 625);
+  const rockBase = new THREE.Mesh(
+    new THREE.CylinderGeometry(16, 22, 5, 8),
+    new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.92 })
+  );
+  rockBase.position.y = 2.0;
+  const domeBase = new THREE.Mesh(
+    new THREE.BoxGeometry(8, 5, 8),
+    new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.7 })
+  );
+  domeBase.position.y = 6.5;
+  const domeTop = new THREE.Mesh(
+    new THREE.ConeGeometry(4.5, 4.5, 8),
+    new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.65 })
+  );
+  domeTop.position.y = 11.2;
+  rockMemorial.add(rockBase, domeBase, domeTop);
+  addToChunk(rockMemorial, 165, 625);
+
+  // 8. All 23 Kerbside Tamil Nadu Bus Terminals & Animated Passengers
   BUS_STOPS.forEach((stop) => {
     const gy = getTerrainHeight(stop.x, stop.z);
     const sx = stop.x + stop.shelterOffsetX;
@@ -917,6 +1132,7 @@ export function buildCoimbatoreCity(
     shelter.position.set(sx, getTerrainHeight(sx, sz), sz);
     shelter.rotation.y = stop.shelterRotY;
     scene.add(shelter);
+    disposableRootObjects.push(shelter);
 
     const bayBox = new THREE.Mesh(
       stop.roadAxis === 'vertical'
@@ -932,6 +1148,7 @@ export function buildCoimbatoreCity(
     bayBox.rotation.x = -Math.PI / 2;
     bayBox.position.set(stop.x, gy + 0.042, stop.z);
     scene.add(bayBox);
+    disposableRootObjects.push(bayBox);
 
     const ringGeom = new THREE.RingGeometry(stop.radius * 0.74, stop.radius, 36);
     const ringMat = new THREE.MeshBasicMaterial({
@@ -944,6 +1161,7 @@ export function buildCoimbatoreCity(
     ringMesh.rotation.x = -Math.PI / 2;
     ringMesh.position.set(stop.x, gy + 0.055, stop.z);
     scene.add(ringMesh);
+    disposableRootObjects.push(ringMesh);
 
     const passengerColors = [0xef4444, 0x3b82f6, 0x10b981, 0xf59e0b, 0x8b5cf6, 0xec4899];
     const passengers: THREE.Group[] = [];
@@ -956,7 +1174,7 @@ export function buildCoimbatoreCity(
       const px =
         stop.x +
         stop.shelterOffsetX * 0.78 +
-        (stop.roadAxis === 'horizontal' ? (p - 2) * 1.1 : dirToCurbX * (p % 2) * 0.8);
+        (stop.roadAxis !== 'vertical' ? (p - 2) * 1.1 : dirToCurbX * (p % 2) * 0.8);
       const pz =
         stop.z +
         stop.shelterOffsetZ * 0.78 +
@@ -965,6 +1183,7 @@ export function buildCoimbatoreCity(
       char.position.set(px, py, pz);
       char.rotation.y = stop.shelterRotY;
       scene.add(char);
+      disposableRootObjects.push(char);
       passengers.push(char);
       baseY.push(py);
     }
@@ -980,35 +1199,36 @@ export function buildCoimbatoreCity(
 
   // 9. Roadside Coconut Stalls & Tea Shops
   [
-    { x: -67.8, z: -120, rot: Math.PI, type: 'coco' },
-    { x: -92.2, z: 20, rot: 0, type: 'tea' },
-    { x: 92.2, z: 72, rot: -Math.PI / 2, type: 'coco' },
-    { x: 227.8, z: -185, rot: Math.PI, type: 'tea' },
-    { x: -227.8, z: 185, rot: Math.PI, type: 'coco' },
+    { x: -227.8, z: -120, rot: Math.PI, type: 'coco' },
+    { x: -252.2, z: 20, rot: 0, type: 'tea' },
+    { x: 12.2, z: 72, rot: -Math.PI / 2, type: 'coco' },
+    { x: 467.8, z: -385, rot: Math.PI, type: 'tea' },
+    { x: -467.8, z: 135, rot: Math.PI, type: 'coco' },
+    { x: 227.8, z: 295, rot: 0, type: 'tea' },
   ].forEach((s) => {
     const m = s.type === 'coco' ? createCoconutStall() : createTeaStall();
     m.position.set(s.x, getTerrainHeight(s.x, s.z), s.z);
     m.rotation.y = s.rot;
-    scene.add(m);
+    addToChunk(m, s.x, s.z);
   });
 
-  // 10. Avenue Trees (Gulmohars, Coconut Palms & Nilgiri Pines) along Corridors
+  // 10. Avenue Trees (Gulmohars, Coconut Palms & Nilgiri Pines) along Corridors (Chunked)
   ROAD_NETWORK.verticalX.forEach((vx) => {
-    for (let z = -340; z <= 340; z += 44) {
-      const nearJunction = ROAD_NETWORK.horizontalZ.some((hz) => Math.abs(z - hz) < 20);
+    for (let z = -580; z <= 580; z += 56) {
+      const nearJunction = ROAD_NETWORK.horizontalZ.some((hz) => Math.abs(z - hz) < 22);
       if (nearJunction) continue;
-      const isPalm = vx >= 80 || z > 150 || vx === -240;
-      const t1 = createRoadsideTree(isPalm && z > -100);
-      t1.position.set(vx + 12.2, getTerrainHeight(vx + 12.2, z), z);
-      scene.add(t1);
+      const isPalm = vx >= 240 || z > 180 || vx === -480;
+      const t1 = createRoadsideTree(isPalm && z > -200);
+      t1.position.set(vx + 12.5, getTerrainHeight(vx + 12.5, z), z);
+      addToChunk(t1, vx + 12.5, z);
 
       const t2 = createRoadsideTree(!isPalm);
-      t2.position.set(vx - 12.2, getTerrainHeight(vx - 12.2, z + 12), z + 12);
-      scene.add(t2);
+      t2.position.set(vx - 12.5, getTerrainHeight(vx - 12.5, z + 14), z + 14);
+      addToChunk(t2, vx - 12.5, z + 14);
     }
   });
 
-  // 11. Highway & City Street Lamps across Main Corridors
+  // 11. Highway & City Street Lamps across Main Corridors (Chunked)
   const lampPoleGeom = new THREE.CylinderGeometry(0.08, 0.11, 6.4, 8);
   const lampArmGeom = new THREE.CylinderGeometry(0.05, 0.05, 2.2, 6);
   const lampHeadGeom = new THREE.BoxGeometry(0.75, 0.16, 0.38);
@@ -1032,8 +1252,8 @@ export function buildCoimbatoreCity(
     blending: THREE.AdditiveBlending,
   });
 
-  [-80, 80, 240].forEach((vx) => {
-    for (let z = -320; z <= 320; z += 58) {
+  [-240, 0, 240, 480].forEach((vx) => {
+    for (let z = -540; z <= 540; z += 76) {
       const gy = getTerrainHeight(vx + 11.0, z);
       const bulbMat = new THREE.MeshStandardMaterial({
         color: 0xfffbeb,
@@ -1052,7 +1272,10 @@ export function buildCoimbatoreCity(
       const pool = new THREE.Mesh(new THREE.PlaneGeometry(12, 12), poolMat);
       pool.rotation.x = -Math.PI / 2;
       pool.position.set(vx + 8.2, gy + 0.04, z);
-      scene.add(pole, arm, head, pool);
+      addToChunk(pole, vx + 11.0, z);
+      addToChunk(arm, vx + 11.0, z);
+      addToChunk(head, vx + 11.0, z);
+      addToChunk(pool, vx + 11.0, z);
     }
   });
 
@@ -1086,7 +1309,16 @@ export function buildCoimbatoreCity(
         }
       });
     },
-    updateEnvironment: (timeSec: number) => {
+    updateEnvironment: (timeSec: number, busX: number = -234.8, busZ: number = -165, viewRadius: number = 420) => {
+      // Chunk distance visibility culling
+      const effectiveRadius = viewRadius + 210;
+      const radSq = effectiveRadius * effectiveRadius;
+      chunksMap.forEach((chunk) => {
+        const dx = chunk.centerX - busX;
+        const dz = chunk.centerZ - busZ;
+        chunk.group.visible = dx * dx + dz * dz <= radSq;
+      });
+
       trafficSignals.forEach((sig) => {
         const state = getSignalState(sig.ix, sig.iz, timeSec);
         sig.nsGreen.emissiveIntensity = state.ns === 'green' ? 2.5 : 0.05;
@@ -1126,6 +1358,23 @@ export function buildCoimbatoreCity(
         lm.emissiveIntensity = lampOn ? 2.4 : 0.15;
       });
       poolMat.opacity = isNight ? 0.55 : isRain ? 0.3 : 0.0;
+    },
+    dispose: () => {
+      disposableRootObjects.forEach((obj) => {
+        scene.remove(obj);
+        obj.traverse((child) => {
+          const mesh = child as THREE.Mesh;
+          if (mesh.geometry) mesh.geometry.dispose();
+          if (mesh.material) {
+            if (Array.isArray(mesh.material)) {
+              mesh.material.forEach((m) => m.dispose());
+            } else {
+              mesh.material.dispose();
+            }
+          }
+        });
+      });
+      poolTex.dispose();
     },
   };
 }

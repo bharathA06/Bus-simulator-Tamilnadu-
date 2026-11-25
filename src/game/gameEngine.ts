@@ -37,6 +37,8 @@ import {
   getZoneSpeedLimit,
   navigationGraph,
 } from './navigationSystem';
+import { ConvoyPeerTelemetry } from './convoySync';
+import { createAiBus } from './proceduralModels';
 
 export interface RuleAlertEvent {
   id: number;
@@ -87,6 +89,8 @@ export interface GameTelemetry {
   clutchPressed: boolean;
   manualGearbox: boolean;
   passengersBoarded: number;
+  passengersOnboard: number;
+  totalMassKg: number;
   totalPassengers: number;
   totalEarnings: number;
   fuelSpentTrip: number;
@@ -121,6 +125,7 @@ export interface GameTelemetry {
   nextRoadName: string;
   routePolyline: Array<{ x: number; z: number }>;
   trafficDots: Array<{ x: number; z: number }>;
+  convoyPeers: Array<{ peerId: string; driverName: string; x: number; z: number; speedKmh: number }>;
   isWrongWay: boolean;
   isSpeeding: boolean;
   zoneSpeedLimitKmh: number;
@@ -137,6 +142,7 @@ export interface GameTelemetry {
   replayProgressPct: number;
   replayFrameCount: number;
   replaySpeedMult: 1 | 2;
+  collisionsCountTrip: number;
 }
 
 export class GameEngine {
@@ -149,6 +155,13 @@ export class GameEngine {
   private clock = new THREE.Clock();
   private targetFps: 30 | 60 | 0 = 60;
   private lastRenderMs = 0;
+  private viewRadius = 420;
+  private currentPixelRatio = 1.35;
+  private lowFpsAccum = 0;
+  private frameCountAccum = 0;
+  private fpsMonitorElapsed = 0;
+  private voiceNavEnabled = true;
+  private lastVoiceNavStepKey = '';
 
   // Lighting
   private dirLight!: THREE.DirectionalLight;
@@ -161,13 +174,17 @@ export class GameEngine {
   private cityEnvironment!: ReturnType<typeof buildCoimbatoreCity>;
   private trafficSystem!: ReturnType<typeof createTrafficSystem>;
 
+  // Convoy Multiplayer Peer Buses
+  private convoyPeers: ConvoyPeerTelemetry[] = [];
+  private convoyMeshes = new Map<string, { group: THREE.Group; liveryId: string }>();
+
   // 3D GPS Holographic Path Guide
   private gpsGuideLine!: THREE.Line;
   private gpsGuideGeom!: THREE.BufferGeometry;
   private gpsChevrons: THREE.Mesh[] = [];
   private navRefreshTimer = 0;
   private dashRefreshTimer = 0;
-  private cachedAdvice = navigationGraph.computeAdvice(-74.8, -155, 0, BUS_STOPS[0], 0);
+  private cachedAdvice = navigationGraph.computeAdvice(-234.8, -165, 0, BUS_STOPS[0], 0);
 
   // Game Route State
   private activeRoute: RouteDefinition = ROUTES[0];
@@ -242,10 +259,13 @@ export class GameEngine {
   private boardingTimer = 0;
   private isBoardingActive = false;
 
-  // Camera vectors
-  private readonly _camCurrent = new THREE.Vector3(-74.8, 5, -168);
-  private readonly _camLookAt = new THREE.Vector3(-74.8, 2, -148);
+  // Camera vectors & touch drag orbit
+  private readonly _camCurrent = new THREE.Vector3(-234.8, 5, -178);
+  private readonly _camLookAt = new THREE.Vector3(-234.8, 2, -158);
   private cinematicAngle = 0.55;
+  private cameraYawOffset = 0;
+  private cameraPitchOffset = 0;
+  private cameraSensitivity = 1.0;
 
   // Settings & Upgrades
   private gameMode: GameMode = 'career';
@@ -255,6 +275,7 @@ export class GameEngine {
   private isShowcaseOrbit: boolean = false;
   private orbitAngle: number = 0.65;
   private distanceTraveledMeters: number = 0;
+  private collisionCountTrip: number = 0;
 
   // Input & pause
   private isPaused: boolean = true;
@@ -265,7 +286,13 @@ export class GameEngine {
     success: boolean,
     earnings: number,
     satisfaction: number,
-    expenses?: { fuelSpent: number; tollsPaid: number; healthPct?: number; dirtinessPct?: number }
+    expenses?: {
+      fuelSpent: number;
+      tollsPaid: number;
+      healthPct?: number;
+      dirtinessPct?: number;
+      collisionsCount?: number;
+    }
   ) => void;
 
   constructor(
@@ -277,7 +304,13 @@ export class GameEngine {
       success: boolean,
       earnings: number,
       satisfaction: number,
-      expenses?: { fuelSpent: number; tollsPaid: number; healthPct?: number; dirtinessPct?: number }
+      expenses?: {
+        fuelSpent: number;
+        tollsPaid: number;
+        healthPct?: number;
+        dirtinessPct?: number;
+        collisionsCount?: number;
+      }
     ) => void
   ) {
     this.mount = mount;
@@ -292,7 +325,10 @@ export class GameEngine {
     this.activeHornId = livery.hornDefault;
     this.routeTimeLeft = route.targetSeconds;
     const spec = BUS_SHOP_SPECS.find((s) => s.liveryId === livery.id);
-    if (spec) this.physics.setBusTopSpeed(spec.topSpeedKmh);
+    if (spec) {
+      this.physics.setBusTopSpeed(spec.topSpeedKmh);
+      this.physics.setBusSpecs(spec.weightKg, spec.lengthMeters);
+    }
 
     this.totalPassengersTarget = route.stops.reduce((acc, sid) => {
       const stop = BUS_STOPS.find((st) => st.id === sid);
@@ -311,6 +347,7 @@ export class GameEngine {
       this.keysHeld = {};
       this.mobileInputsActive = false;
       this.physics.setInputs(0, 0, false, this.physics.state.isReverse, false);
+      busAudio.stopHorn();
     }
   }
 
@@ -326,6 +363,8 @@ export class GameEngine {
     this.speedUnit = settings.speedUnit;
     this.controlScheme = settings.controlScheme;
     this.cameraMode = settings.defaultCamera;
+    this.cameraSensitivity = settings.cameraSensitivity ?? 1.0;
+    this.voiceNavEnabled = settings.voiceNavigation ?? true;
     this.targetFps = settings.targetFps ?? 60;
     this.physics.setSteeringSensitivity(settings.steeringSensitivity);
     this.physics.setAutoReverse(settings.autoReverse);
@@ -333,18 +372,31 @@ export class GameEngine {
     this.physics.setSpeedLimiter80(settings.speedLimiter80 ?? true);
     busAudio.setMasterVolume(settings.masterVolume);
     busAudio.setMusicVolume(settings.musicVolume ?? 45);
+    this.trafficSystem?.setTrafficSettings(
+      settings.trafficDensity ?? 'normal',
+      settings.trafficSpeed ?? 'normal',
+      this.physics.state.x,
+      this.physics.state.z
+    );
+
+    if (settings.graphicsQuality === 'low') {
+      this.viewRadius = 260;
+      this.currentPixelRatio = 1.0;
+    } else if (settings.graphicsQuality === 'medium') {
+      this.viewRadius = 380;
+      this.currentPixelRatio = Math.min(window.devicePixelRatio || 1, 1.35);
+    } else if (settings.graphicsQuality === 'high') {
+      this.viewRadius = 520;
+      this.currentPixelRatio = Math.min(window.devicePixelRatio || 1, 1.85);
+    } else {
+      // ultra
+      this.viewRadius = 720;
+      this.currentPixelRatio = Math.min(window.devicePixelRatio || 1, 2.25);
+    }
 
     if (this.renderer && !this.isSoftwareGl) {
-      if (settings.graphicsQuality === 'low') {
-        this.renderer.setPixelRatio(1);
-        this.renderer.shadowMap.enabled = false;
-      } else if (settings.graphicsQuality === 'medium') {
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.35));
-        this.renderer.shadowMap.enabled = true;
-      } else {
-        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        this.renderer.shadowMap.enabled = true;
-      }
+      this.renderer.setPixelRatio(this.currentPixelRatio);
+      this.renderer.shadowMap.enabled = settings.graphicsQuality !== 'low';
       this.dirLight.castShadow = this.renderer.shadowMap.enabled;
     }
   }
@@ -402,12 +454,15 @@ export class GameEngine {
 
     this.renderer.setSize(this.mount.clientWidth, this.mount.clientHeight);
     this.mount.appendChild(this.renderer.domElement);
+    this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+    });
 
     this.camera = new THREE.PerspectiveCamera(
       60,
-      this.mount.clientWidth / this.mount.clientHeight,
+      this.mount.clientWidth / Math.max(1, this.mount.clientHeight),
       0.16,
-      1150
+      1400
     );
   }
 
@@ -665,6 +720,14 @@ export class GameEngine {
     busAudio.playHorn(this.activeHornId);
   }
 
+  public startAirHorn() {
+    busAudio.startHorn(this.activeHornId);
+  }
+
+  public stopAirHorn() {
+    busAudio.stopHorn();
+  }
+
   public playConductorWhistle() {
     busAudio.playWhistle();
     if (this.isBusAtActiveStop() && this.physics.state.doorOpen && !this.isBoardingActive) {
@@ -864,16 +927,36 @@ export class GameEngine {
 
   public cycleCamera() {
     this.cameraMode = (this.cameraMode + 1) % CAMERA_MODES.length;
+    this.resetCameraLook();
   }
 
   public setCameraMode(mode: number) {
     this.cameraMode = Math.max(0, Math.min(CAMERA_MODES.length - 1, mode));
+    this.resetCameraLook();
+  }
+
+  public setCameraLookDelta(dxNorm: number, dyNorm: number) {
+    const sens = this.cameraSensitivity * 2.4;
+    this.cameraYawOffset = Math.max(-2.2, Math.min(2.2, this.cameraYawOffset - dxNorm * sens));
+    this.cameraPitchOffset = Math.max(-0.55, Math.min(0.65, this.cameraPitchOffset - dyNorm * sens * 0.7));
+  }
+
+  public resetCameraLook() {
+    this.cameraYawOffset = 0;
+    this.cameraPitchOffset = 0;
+  }
+
+  public setConvoyPeers(peers: ConvoyPeerTelemetry[]) {
+    this.convoyPeers = peers;
   }
 
   public setLivery(livery: BusLivery) {
     this.currentLivery = livery;
     const spec = BUS_SHOP_SPECS.find((s) => s.liveryId === livery.id);
-    if (spec) this.physics.setBusTopSpeed(spec.topSpeedKmh);
+    if (spec) {
+      this.physics.setBusTopSpeed(spec.topSpeedKmh);
+      this.physics.setBusSpecs(spec.weightKg, spec.lengthMeters);
+    }
     this.busModel.updateLivery(livery, this.activeCustomization);
     this.activeHornId = livery.hornDefault;
   }
@@ -954,6 +1037,7 @@ export class GameEngine {
     this.isReplaying = false;
     this.satisfaction = 100;
     this.distanceTraveledMeters = 0;
+    this.collisionCountTrip = 0;
     this.routeTimeLeft = route.targetSeconds;
     this.routeCompleted = false;
     this.missionFailed = false;
@@ -962,9 +1046,17 @@ export class GameEngine {
     this.positionBusAtRouteStart(route);
   }
 
-  public setMobileInput(throttle: number, steer: number, brake: boolean, reverse: boolean) {
-    this.mobileInputsActive = throttle !== 0 || steer !== 0 || brake;
-    this.physics.setInputs(throttle, steer, brake, reverse);
+  public setMobileInput(
+    throttle: number,
+    steer: number,
+    brake: boolean | number,
+    reverse: boolean,
+    clutch: boolean = false,
+    handbrake?: boolean
+  ) {
+    const brakeActive = typeof brake === 'number' ? brake > 0.02 : brake;
+    this.mobileInputsActive = throttle !== 0 || steer !== 0 || brakeActive || clutch || !!handbrake;
+    this.physics.setInputs(throttle, steer, brake, reverse, clutch, handbrake);
     busAudio.startEngine();
     busAudio.startAmbientMusic();
   }
@@ -1035,6 +1127,7 @@ export class GameEngine {
     const count = stop ? stop.passengersWaiting : 4;
     const rate = stop ? stop.ticketRate : 25;
     this.passengersBoardedTotal += count;
+    this.physics.setPassengersCount(this.passengersBoardedTotal);
     this.ticketsIssued += count;
     const earned = Math.round(count * rate * this.fareBonusMult);
     this.totalEarnings += earned;
@@ -1067,6 +1160,7 @@ export class GameEngine {
           tollsPaid: this.tollsPaidTrip,
           healthPct: this.physics.state.healthPct,
           dirtinessPct: this.physics.state.dirtinessPct,
+          collisionsCount: this.collisionCountTrip,
         });
       }
     } else {
@@ -1103,6 +1197,27 @@ export class GameEngine {
 
       const rawDt = this.clock.getDelta();
       const dt = Math.min(rawDt, 0.05);
+
+      // Adaptive DPR scaler: if real GPU FPS drops below 24fps sustained, step down pixelRatio smoothly
+      if (!this.isSoftwareGl && !this.isPaused && rawDt > 0) {
+        this.frameCountAccum += 1;
+        this.fpsMonitorElapsed += rawDt;
+        if (this.fpsMonitorElapsed >= 2.5) {
+          const avgFps = this.frameCountAccum / this.fpsMonitorElapsed;
+          if (avgFps < 23 && this.currentPixelRatio > 0.85) {
+            this.lowFpsAccum += 1;
+            if (this.lowFpsAccum >= 2) {
+              this.currentPixelRatio = Math.max(0.85, Number((this.currentPixelRatio - 0.25).toFixed(2)));
+              this.renderer.setPixelRatio(this.currentPixelRatio);
+              this.lowFpsAccum = 0;
+            }
+          } else {
+            this.lowFpsAccum = 0;
+          }
+          this.frameCountAccum = 0;
+          this.fpsMonitorElapsed = 0;
+        }
+      }
 
       this.updateSimulation(dt);
       this.renderer.render(this.scene, this.camera);
@@ -1205,19 +1320,22 @@ export class GameEngine {
     // 2. Step Bus Physics
     const { hitObstacle } = this.physics.update(dt, this.cityEnvironment.colliders);
     if (hitObstacle) {
+      this.collisionCountTrip += 1;
       this.satisfaction = Math.max(0, this.satisfaction - 6);
       this.triggerRuleAlert('COLLISION DAMAGE & PENALTY', TRAFFIC_RULES.collisionFine, true);
     }
 
-    // 3. Step Traffic Subsystem
+    // 3. Step Traffic Subsystem (with distance culling)
     const trafficRes = this.trafficSystem.updateTraffic(
       dt,
       this.physics.state.x,
       this.physics.state.z,
       this.physics.state.heading,
-      elapsedTime
+      elapsedTime,
+      this.viewRadius
     );
     if (trafficRes.collided) {
+      this.collisionCountTrip += 1;
       this.physics.handleCollisionImpact(1.2);
       this.satisfaction = Math.max(0, this.satisfaction - 10);
       this.triggerRuleAlert('TRAFFIC COLLISION', TRAFFIC_RULES.collisionFine, true);
@@ -1340,6 +1458,23 @@ export class GameEngine {
     if (this.navRefreshTimer <= 0) {
       this.navRefreshTimer = 0.14;
       this.refreshNavigation(elapsedTime);
+      // Trigger spoken turn-by-turn guidance when approaching a maneuver
+      if (this.voiceNavEnabled && s.speedKmh > 6) {
+        const adv = this.cachedAdvice;
+        if ((adv.maneuver === 'left' || adv.maneuver === 'right' || adv.maneuver === 'uturn') && adv.distanceMeters <= 55 && adv.distanceMeters >= 15) {
+          const stepKey = `${activeStop.id}_${adv.maneuver}_${adv.nextRoadName}`;
+          if (this.lastVoiceNavStepKey !== stepKey) {
+            this.lastVoiceNavStepKey = stepKey;
+            const actionText =
+              adv.maneuver === 'left'
+                ? `In ${adv.distanceMeters} meters, turn left onto ${adv.nextRoadName}`
+                : adv.maneuver === 'right'
+                ? `In ${adv.distanceMeters} meters, turn right onto ${adv.nextRoadName}`
+                : `In ${adv.distanceMeters} meters, prepare for U turn`;
+            busAudio.speakNavInstruction(actionText, true);
+          }
+        }
+      }
     }
 
     if (this.isBoardingActive) {
@@ -1361,6 +1496,7 @@ export class GameEngine {
             tollsPaid: this.tollsPaidTrip,
             healthPct: s.healthPct,
             dirtinessPct: s.dirtinessPct,
+            collisionsCount: this.collisionCountTrip,
           });
         }
       }
@@ -1478,7 +1614,8 @@ export class GameEngine {
       });
     }
 
-    this.cityEnvironment.updateEnvironment(elapsedTime);
+    this.cityEnvironment.updateEnvironment(elapsedTime, s.x, s.z, this.viewRadius);
+    this.syncConvoyMeshes();
 
     // Exhaust smoke puffs from rear-right tailpipe
     const exForwardX = Math.sin(s.heading);
@@ -1557,6 +1694,8 @@ export class GameEngine {
       clutchPressed: s.clutchPressed,
       manualGearbox: s.manualGearbox,
       passengersBoarded: this.passengersBoardedTotal,
+      passengersOnboard: s.passengersOnboard,
+      totalMassKg: Math.round(s.totalMassKg),
       totalPassengers: this.totalPassengersTarget,
       totalEarnings: this.totalEarnings,
       fuelSpentTrip: this.fuelSpentTrip,
@@ -1590,7 +1729,14 @@ export class GameEngine {
       maneuverDistance: this.cachedAdvice.distanceMeters,
       nextRoadName: this.cachedAdvice.nextRoadName,
       routePolyline: this.cachedAdvice.waypoints,
-      trafficDots: this.trafficSystem.vehicles.map((v) => ({ x: v.x, z: v.z })),
+      trafficDots: this.trafficSystem.getActiveVehicles().map((v) => ({ x: v.x, z: v.z })),
+      convoyPeers: this.convoyPeers.map((p) => ({
+        peerId: p.peerId,
+        driverName: p.driverName,
+        x: p.x,
+        z: p.z,
+        speedKmh: p.speedKmh,
+      })),
       isWrongWay,
       isSpeeding,
       zoneSpeedLimitKmh: zoneLimit,
@@ -1607,6 +1753,30 @@ export class GameEngine {
       replayProgressPct: replayPct,
       replayFrameCount: this.replayFrames.length,
       replaySpeedMult: this.replaySpeedMult,
+      collisionsCountTrip: this.collisionCountTrip,
+    });
+  }
+
+  private syncConvoyMeshes() {
+    const activeIds = new Set(this.convoyPeers.map((p) => p.peerId));
+    this.convoyMeshes.forEach((entry, id) => {
+      if (!activeIds.has(id)) {
+        this.scene.remove(entry.group);
+        this.convoyMeshes.delete(id);
+      }
+    });
+
+    this.convoyPeers.forEach((peer) => {
+      let entry = this.convoyMeshes.get(peer.peerId);
+      if (!entry) {
+        const liv = BUS_LIVERIES.find((l) => l.id === peer.liveryId) || BUS_LIVERIES[4];
+        const built = createAiBus(liv.bodyColorHex, liv.stripeColorHex);
+        this.scene.add(built.group);
+        entry = { group: built.group, liveryId: peer.liveryId };
+        this.convoyMeshes.set(peer.peerId, entry);
+      }
+      entry.group.position.set(peer.x, getTerrainHeight(peer.x, peer.z), peer.z);
+      entry.group.rotation.y = peer.heading;
     });
   }
 
@@ -1624,8 +1794,10 @@ export class GameEngine {
           ? 76
           : 68
         : this.cameraMode === 1
+        ? 56
+        : this.cameraMode === 2
         ? 64
-        : this.cameraMode === 4
+        : this.cameraMode === 5
         ? 64
         : 58 + speedRatio * 9;
     if (Math.abs(this.camera.fov - targetFov) > 0.05) {
@@ -1634,69 +1806,88 @@ export class GameEngine {
     }
 
     if (this.cameraMode === 0) {
-      // 0: Driver Cockpit View (1st-person RHD eye behind steering wheel & live gauges, with adjustable seat height!)
+      // 0: Driver Cockpit View (1st-person RHD eye behind steering wheel & live gauges + touch look!)
       const localX = -0.66;
       const localZ = 3.36;
       const cabinX = s.x + localX * cosH + localZ * sinH;
       const cabinZ = s.z - localX * sinH + localZ * cosH;
-      const lookHeading = s.heading + s.steerAngle * 0.35;
+      const lookHeading = s.heading + s.steerAngle * 0.35 + this.cameraYawOffset;
       const eyeY = s.y + 2.08 + this.seatOffsetY + s.suspensionBounce * 0.6;
       this.camera.position.set(cabinX, eyeY, cabinZ);
       this.camera.lookAt(
         cabinX + Math.sin(lookHeading) * 26,
-        eyeY - 0.35 - (s.pitchTilt - s.terrainPitch) * 14,
+        eyeY - 0.35 + this.cameraPitchOffset * 8 - (s.pitchTilt - s.terrainPitch) * 14,
         cabinZ + Math.cos(lookHeading) * 26
       );
     } else if (this.cameraMode === 1) {
-      // 1: Front Camera (Low Front Bumper Highway View)
-      const frontX = s.x + forwardX * 5.05;
-      const frontZ = s.z + forwardZ * 5.05;
-      this.camera.position.set(frontX, s.y + 1.15, frontZ);
+      // 1: Dashboard View (Focused close-up of gauges, steering wheel & windshield)
+      const localX = -0.66;
+      const localZ = 3.55;
+      const dashX = s.x + localX * cosH + localZ * sinH;
+      const dashZ = s.z - localX * sinH + localZ * cosH;
+      const lookHeading = s.heading + this.cameraYawOffset * 0.5;
+      const eyeY = s.y + 1.88 + this.seatOffsetY * 0.6;
+      this.camera.position.set(dashX, eyeY, dashZ);
       this.camera.lookAt(
-        frontX + forwardX * 32,
-        s.y + 1.05 - (s.pitchTilt - s.terrainPitch) * 18,
-        frontZ + forwardZ * 32
+        dashX + Math.sin(lookHeading) * 18,
+        eyeY - 0.52 + this.cameraPitchOffset * 5 - (s.pitchTilt - s.terrainPitch) * 10,
+        dashZ + Math.cos(lookHeading) * 18
       );
     } else if (this.cameraMode === 2) {
-      // 2: Rear Camera (Reverse & Tail Mirror)
+      // 2: Front Camera (Low Front Bumper Highway View)
+      const frontX = s.x + forwardX * 5.05;
+      const frontZ = s.z + forwardZ * 5.05;
+      const lookH = s.heading + this.cameraYawOffset * 0.4;
+      this.camera.position.set(frontX, s.y + 1.15, frontZ);
+      this.camera.lookAt(
+        frontX + Math.sin(lookH) * 32,
+        s.y + 1.05 + this.cameraPitchOffset * 6 - (s.pitchTilt - s.terrainPitch) * 18,
+        frontZ + Math.cos(lookH) * 32
+      );
+    } else if (this.cameraMode === 3) {
+      // 3: Rear Camera (Reverse & Tail Mirror)
       const rearX = s.x - forwardX * 4.88;
       const rearZ = s.z - forwardZ * 4.88;
       this.camera.position.set(rearX, s.y + 2.45, rearZ);
-      this.camera.lookAt(rearX - forwardX * 24, s.y + 1.35, rearZ - forwardZ * 24);
-    } else if (this.cameraMode === 3) {
-      // 3: Exterior Third-Person Chase
+      this.camera.lookAt(rearX - forwardX * 24, s.y + 1.35 + this.cameraPitchOffset * 4, rearZ - forwardZ * 24);
+    } else if (this.cameraMode === 4) {
+      // 4: Exterior Third-Person Chase (supports touch orbit yaw/pitch!)
       const camDist = 13.5 + speedRatio * 1.2;
-      const targetCamX = s.x - forwardX * camDist;
-      const targetCamZ = s.z - forwardZ * camDist;
-      const targetCamY = s.y + 4.75;
+      const orbitHeading = s.heading + this.cameraYawOffset;
+      const orbX = Math.sin(orbitHeading);
+      const orbZ = Math.cos(orbitHeading);
+      const targetCamX = s.x - orbX * camDist;
+      const targetCamZ = s.z - orbZ * camDist;
+      const targetCamY = s.y + Math.max(1.8, 4.75 - this.cameraPitchOffset * 3.5);
 
       this._camCurrent.x += (targetCamX - this._camCurrent.x) * Math.min(1, 8 * dt);
       this._camCurrent.y += (targetCamY - this._camCurrent.y) * Math.min(1, 8 * dt);
       this._camCurrent.z += (targetCamZ - this._camCurrent.z) * Math.min(1, 8 * dt);
 
       this.camera.position.copy(this._camCurrent);
-      this._camLookAt.set(s.x + forwardX * 6.5, s.y + 2.25, s.z + forwardZ * 6.5);
+      this._camLookAt.set(s.x + forwardX * 4.5, s.y + 2.15, s.z + forwardZ * 4.5);
       this.camera.lookAt(this._camLookAt);
-    } else if (this.cameraMode === 4) {
-      // 4: Passenger View (Inside Left-Row Window Seat)
+    } else if (this.cameraMode === 5) {
+      // 5: Passenger View (Inside Left-Row Window Seat)
       const localX = 0.65;
       const localZ = -0.35;
       const paxX = s.x + localX * cosH + localZ * sinH;
       const paxZ = s.z - localX * sinH + localZ * cosH;
+      const lookH = s.heading + this.cameraYawOffset;
       this.camera.position.set(paxX, s.y + 1.92 + s.suspensionBounce * 0.5, paxZ);
       this.camera.lookAt(
-        s.x + forwardX * 16 + 0.1 * cosH,
-        s.y + 1.85,
-        s.z + forwardZ * 16 - 0.1 * sinH
+        paxX + Math.sin(lookH) * 16,
+        s.y + 1.85 + this.cameraPitchOffset * 6,
+        paxZ + Math.cos(lookH) * 16
       );
     } else {
-      // 5: Cinematic Cam (Smooth orbiting tracking angle)
+      // 6: Cinematic Cam (Dynamic Three-Quarter Orbit)
       this.cinematicAngle += dt * 0.25;
       const radius = 14.5;
-      const orbitAngle = s.heading + Math.PI * 0.72 + Math.sin(this.cinematicAngle) * 0.45;
+      const orbitAngle = s.heading + Math.PI * 0.72 + Math.sin(this.cinematicAngle) * 0.45 + this.cameraYawOffset;
       this.camera.position.set(
         s.x + Math.sin(orbitAngle) * radius,
-        s.y + 4.2 + Math.sin(this.cinematicAngle * 0.7) * 0.8,
+        s.y + 4.2 + Math.sin(this.cinematicAngle * 0.7) * 0.8 - this.cameraPitchOffset * 2.5,
         s.z + Math.cos(orbitAngle) * radius
       );
       this.camera.lookAt(s.x + forwardX * 2.5, s.y + 1.75, s.z + forwardZ * 2.5);
@@ -1708,10 +1899,14 @@ export class GameEngine {
       cancelAnimationFrame(this.frameId);
       clearTimeout(this.frameId);
     }
+    busAudio.stopHorn();
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
     window.removeEventListener('blur', this.handleWindowBlur);
     window.removeEventListener('resize', this.handleResize);
+    this.convoyMeshes.forEach((m) => this.scene.remove(m.group));
+    this.convoyMeshes.clear();
+    this.cityEnvironment.dispose();
     this.trafficSystem.dispose();
     this.renderer.dispose();
   }

@@ -326,15 +326,54 @@ class BusAudioEngine {
     }
   }
 
+  public startHorn(hornType: number = 0) {
+    this.initCtx();
+    if (!this.ctx || this.isMuted) return;
+    if (this.activeHornNodes.length > 0) return;
+
+    const now = this.ctx.currentTime;
+    const freqMap: Record<number, number[]> = {
+      0: [370, 466, 554, 740],
+      1: [440, 554, 659, 880],
+      2: [220, 277, 330, 440],
+      3: [330, 415, 493, 660],
+    };
+    const freqs = freqMap[hornType] || freqMap[0];
+
+    freqs.forEach((freq, idx) => {
+      const osc = this.ctx!.createOscillator();
+      const gain = this.ctx!.createGain();
+      osc.type = idx % 2 === 0 ? 'sawtooth' : 'triangle';
+      osc.frequency.setValueAtTime(freq, now);
+      gain.gain.setValueAtTime(0.001, now);
+      gain.gain.linearRampToValueAtTime(0.11, now + 0.04);
+      osc.connect(gain);
+      gain.connect(this.getOutputNode());
+      osc.start(now);
+      this.activeHornNodes.push({ osc, gain });
+    });
+
+    this.hornTimeoutId = window.setTimeout(() => this.stopHorn(), 5000);
+  }
+
   public stopHorn() {
     if (this.hornTimeoutId) {
       clearTimeout(this.hornTimeoutId);
       this.hornTimeoutId = null;
     }
-    this.activeHornNodes.forEach(({ osc }) => {
+    this.activeHornNodes.forEach(({ osc, gain }) => {
       try {
-        osc.stop();
-        osc.disconnect();
+        if (this.ctx) {
+          gain.gain.setTargetAtTime(0.0001, this.ctx.currentTime, 0.02);
+        }
+        osc.stop(this.ctx ? this.ctx.currentTime + 0.04 : 0);
+        setTimeout(() => {
+          try {
+            osc.disconnect();
+          } catch {
+            // Ignored
+          }
+        }, 60);
       } catch {
         // Ignored
       }
@@ -465,6 +504,24 @@ class BusAudioEngine {
     gain.connect(this.getOutputNode());
     osc.start(now);
     osc.stop(now + 0.05);
+  }
+
+  private lastVoiceNavMs = 0;
+
+  public speakNavInstruction(phrase: string, enabled: boolean = true) {
+    if (!enabled || this.isMuted || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    const now = Date.now();
+    if (now - this.lastVoiceNavMs < 4800) return;
+    this.lastVoiceNavMs = now;
+    try {
+      const utter = new SpeechSynthesisUtterance(phrase);
+      utter.rate = 1.04;
+      utter.pitch = 1.0;
+      utter.volume = Math.min(0.85, this.masterVolume);
+      window.speechSynthesis.speak(utter);
+    } catch {
+      // Speech synthesis unsupported
+    }
   }
 
   public announceBusStop(stopNameEn: string, isDeparture: boolean = false) {

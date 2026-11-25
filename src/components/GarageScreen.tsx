@@ -147,7 +147,9 @@ export function GarageScreen({
                 {currentCustom.registrationNumber}
               </span>
             </div>
-            <div className="text-[11px] text-neutral-400 mt-0.5">{selectedSpec.chassisModel}</div>
+            <div className="text-[11px] text-neutral-400 mt-0.5">
+              {selectedSpec.chassisModel} · {(selectedSpec.weightKg / 1000).toFixed(1)}T · {selectedSpec.lengthMeters}m
+            </div>
             <div className="grid grid-cols-3 gap-2 mt-2.5 text-[11px]">
               <div className="bg-white/5 rounded-lg p-1.5 text-center">
                 <span className="text-neutral-400 block text-[10px]">Engine</span>
