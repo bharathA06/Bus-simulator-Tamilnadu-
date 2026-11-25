@@ -143,16 +143,25 @@ export class BusPhysics {
     this.state.isBraking = false;
     this.state.serviceBrakePedal = 0;
     this.state.parkingBrake = false;
+    this.state.clutchPressed = false;
+    this.state.handbrake = false;
+    this.state.throttleInput = 0;
+    this.state.steerInput = 0;
     this.state.isReverse = false;
     this.state.leftIndicator = false;
     this.state.rightIndicator = false;
     this.state.hazardLights = false;
+    this.state.manualWipers = false;
     this.state.cruiseControlSpeed = null;
     this.state.doorOpen = false;
     this.state.isDrifting = false;
     this.state.driftAngle = 0;
     this.state.passengersOnboard = 0;
     this.state.totalMassKg = this._busBaseMassKg;
+    this._wasBraking = false;
+    this._hitCooldown = 0;
+    this._indicatorPhase = 0;
+    this._prevBlinkOn = false;
     this._smoothedSteerInput = 0;
     this._indicatorEngagedTurnPeak = false;
     this._prevGear = 'N';
@@ -262,7 +271,7 @@ export class BusPhysics {
     throttle: number,
     steer: number,
     brake: boolean | number,
-    reverse: boolean,
+    reverse?: boolean,
     clutch: boolean = false,
     handbrakeOverride?: boolean
   ) {
@@ -275,12 +284,34 @@ export class BusPhysics {
       this.state.serviceBrakePedal = brake ? 1 : 0;
       this.state.handbrake = handbrakeOverride !== undefined ? handbrakeOverride : brake;
     }
-    this.state.isReverse = reverse;
+    if (reverse !== undefined) {
+      this.state.isReverse = reverse;
+    }
     this.state.clutchPressed = clutch;
 
-    if (this.state.serviceBrakePedal > 0.05 || this.state.handbrake || reverse || this.state.throttleInput < -0.1) {
+    if (
+      this.state.serviceBrakePedal > 0.05 ||
+      this.state.handbrake ||
+      this.state.isReverse ||
+      this.state.throttleInput < -0.1
+    ) {
       this.state.cruiseControlSpeed = null;
     }
+  }
+
+  public toggleReverse(): boolean {
+    if (this.state.manualGearbox) {
+      this.state.manualGearIndex = this.state.manualGearIndex === -1 ? 0 : -1;
+      this.state.isReverse = this.state.manualGearIndex === -1;
+      this.syncManualGearLabel();
+      this.state.gearShiftAnim = 1.0;
+      busAudio.playGearShift();
+    } else {
+      this.state.isReverse = !this.state.isReverse;
+      busAudio.playAirBrakeHiss();
+    }
+    this.state.cruiseControlSpeed = null;
+    return this.state.isReverse;
   }
 
   public toggleParkingBrake(): boolean {
@@ -368,7 +399,7 @@ export class BusPhysics {
   }
 
   public toggleDoor(): boolean {
-    if (Math.abs(this.state.speedKmh) > 2) return false;
+    if (Math.abs(this.state.speedKmh) > 3) return false;
     this.state.doorOpen = !this.state.doorOpen;
     this.state.cruiseControlSpeed = null;
     this.state.airPressure = Math.max(88, this.state.airPressure - 2.5);
@@ -391,7 +422,7 @@ export class BusPhysics {
 
   public update(
     dt: number,
-    colliders: { minX: number; maxX: number; minZ: number; maxZ: number }[]
+    colliders: { minX: number; maxX: number; minZ: number; maxZ: number }[] = []
   ): { hitObstacle: boolean } {
     if (this._hitCooldown > 0) this._hitCooldown -= dt;
 
@@ -471,6 +502,7 @@ export class BusPhysics {
 
     const isManualReverseAccel = manualAllowsReverse && effectiveThrottle > 0 && !s.clutchPressed && !s.parkingBrake && !footBrake;
     const isAutoReverseAccel =
+      !driveDisengaged &&
       !s.manualGearbox &&
       this._autoReverse &&
       !s.isReverse &&

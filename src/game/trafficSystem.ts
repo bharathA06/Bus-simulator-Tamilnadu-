@@ -574,19 +574,22 @@ export function createTrafficSystem(scene: THREE.Scene): {
         if (idx >= activeLimit) {
           veh.mesh.visible = false;
           veh.turnPhase = null;
-        } else if (idx >= prevLimit && busX !== undefined && busZ !== undefined) {
-          // Avoid spawning newly activated traffic directly on top of the player bus
-          if (Math.hypot(veh.x - busX, veh.z - busZ) < 26) {
-            if (veh.lane === 'vertical') {
-              veh.z += veh.direction * 48;
-              if (veh.z > maxZLoop) veh.z = minZLoop + 10;
-              if (veh.z < minZLoop) veh.z = maxZLoop - 10;
-            } else {
-              veh.x += veh.direction * 48;
-              if (veh.x > maxXLoop) veh.x = minXLoop + 10;
-              if (veh.x < minXLoop) veh.x = maxXLoop - 10;
+        } else {
+          veh.mesh.visible = true;
+          if (idx >= prevLimit && busX !== undefined && busZ !== undefined) {
+            // Avoid spawning newly activated traffic directly on top of the player bus
+            if (Math.hypot(veh.x - busX, veh.z - busZ) < 26) {
+              if (veh.lane === 'vertical') {
+                veh.z += veh.direction * 48;
+                if (veh.z > maxZLoop) veh.z = minZLoop + 10;
+                if (veh.z < minZLoop) veh.z = maxZLoop - 10;
+              } else {
+                veh.x += veh.direction * 48;
+                if (veh.x > maxXLoop) veh.x = minXLoop + 10;
+                if (veh.x < minXLoop) veh.x = maxXLoop - 10;
+              }
+              veh.mesh.position.set(veh.x, getTerrainHeight(veh.x, veh.z), veh.z);
             }
-            veh.mesh.position.set(veh.x, getTerrainHeight(veh.x, veh.z), veh.z);
           }
         }
       });

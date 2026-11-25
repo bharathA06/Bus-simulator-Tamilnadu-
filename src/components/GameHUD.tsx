@@ -172,11 +172,15 @@ export function GameHUD({
   onMobileInput,
 }: GameHUDProps) {
   const [isMapZoomed, setIsMapZoomed] = useState(false);
-  const [showHornMenu, setShowHornMenu] = useState(false);
-  const [showCameraMenu, setShowCameraMenu] = useState(false);
-  const [showRadioMenu, setShowRadioMenu] = useState(false);
-  const [showCabMenu, setShowCabMenu] = useState(false);
-  const [showMobileDrawer, setShowMobileDrawer] = useState(false);
+  const [activeMenu, setActiveMenu] = useState<'none' | 'camera' | 'drawer' | 'horn' | 'radio' | 'cab'>('none');
+  const toggleMenu = (menu: 'camera' | 'drawer' | 'horn' | 'radio' | 'cab') => {
+    setActiveMenu((prev) => (prev === menu ? 'none' : menu));
+  };
+  const showHornMenu = activeMenu === 'horn';
+  const showCameraMenu = activeMenu === 'camera';
+  const showRadioMenu = activeMenu === 'radio';
+  const showCabMenu = activeMenu === 'cab';
+  const showMobileDrawer = activeMenu === 'drawer';
   const [isFullscreen, setIsFullscreen] = useState<boolean>(
     typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
   );
@@ -204,11 +208,10 @@ export function GameHUD({
   });
 
   const wheelPointerIdRef = useRef<number | null>(null);
-  const wheelStartAngleRef = useRef<number>(0);
-  const wheelStartValueRef = useRef<number>(0);
+  const wheelPrevAngleRef = useRef<number>(0);
+  const wheelAccumDegRef = useRef<number>(0);
   const lookPointerRef = useRef<{ id: number; x: number; y: number } | null>(null);
   const lastLookTapRef = useRef<number>(0);
-  const hornHoldTimerRef = useRef<number | null>(null);
 
   const haptic = useCallback(
     (ms = 12) => {
@@ -301,6 +304,9 @@ export function GameHUD({
   // Clear stuck inputs on blur/visibility change
   useEffect(() => {
     const clearAll = () => {
+      wheelPointerIdRef.current = null;
+      lookPointerRef.current = null;
+      wheelAccumDegRef.current = 0;
       controlsRef.current = { throttle: 0, steer: 0, brake: 0, reverse: false, clutch: false, handbrake: false };
       setWheelSteerVisual(0);
       setPedalPressed({ gas: false, brake: false, clutch: false, horn: false });
@@ -311,7 +317,7 @@ export function GameHUD({
     return () => window.removeEventListener('blur', clearAll);
   }, [onStopAirHorn, pushTouchInputs]);
 
-  // Interactive Virtual Steering Wheel pointer handlers
+  // Interactive Virtual Steering Wheel pointer handlers (incremental delta avoids +/-180 wrap snap)
   const getWheelAngleDeg = (el: HTMLElement, clientX: number, clientY: number) => {
     const rect = el.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
@@ -323,8 +329,8 @@ export function GameHUD({
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     wheelPointerIdRef.current = e.pointerId;
-    wheelStartAngleRef.current = getWheelAngleDeg(e.currentTarget, e.clientX, e.clientY);
-    wheelStartValueRef.current = controlsRef.current.steer;
+    wheelPrevAngleRef.current = getWheelAngleDeg(e.currentTarget, e.clientX, e.clientY);
+    wheelAccumDegRef.current = -controlsRef.current.steer * 140;
     haptic(8);
   };
 
@@ -332,11 +338,13 @@ export function GameHUD({
     if (wheelPointerIdRef.current !== e.pointerId) return;
     e.stopPropagation();
     const currAngle = getWheelAngleDeg(e.currentTarget, e.clientX, e.clientY);
-    let delta = currAngle - wheelStartAngleRef.current;
-    if (delta > 180) delta -= 360;
-    if (delta < -180) delta += 360;
-    // Clockwise (+delta) = steer right (-steer in physics); Counter-clockwise (-delta) = steer left (+steer)
-    const nextSteer = Math.max(-1, Math.min(1, wheelStartValueRef.current - delta / 110));
+    let step = currAngle - wheelPrevAngleRef.current;
+    if (step > 180) step -= 360;
+    if (step < -180) step += 360;
+    wheelPrevAngleRef.current = currAngle;
+    wheelAccumDegRef.current = Math.max(-140, Math.min(140, wheelAccumDegRef.current + step));
+    // Clockwise (+deg) = steer right (-steer in physics); Counter-clockwise (-deg) = steer left (+steer)
+    const nextSteer = Math.max(-1, Math.min(1, -wheelAccumDegRef.current / 140));
     setWheelSteerVisual(nextSteer);
     updateTouchField({ steer: nextSteer });
   };
@@ -345,6 +353,7 @@ export function GameHUD({
     if (wheelPointerIdRef.current !== e.pointerId) return;
     e.stopPropagation();
     wheelPointerIdRef.current = null;
+    wheelAccumDegRef.current = 0;
     setWheelSteerVisual(0);
     updateTouchField({ steer: 0 });
   };
@@ -382,10 +391,6 @@ export function GameHUD({
     setPedalPressed((p) => ({ ...p, horn: true }));
     haptic(15);
     onStartAirHorn();
-    if (hornHoldTimerRef.current) window.clearTimeout(hornHoldTimerRef.current);
-    hornHoldTimerRef.current = window.setTimeout(() => {
-      // Fallback single melodic pulse if short tap
-    }, 80);
   };
 
   const handleHornUp = (e: React.PointerEvent<HTMLButtonElement>) => {
@@ -556,7 +561,7 @@ export function GameHUD({
                     transform={
                       isMapZoomed
                         ? undefined
-                        : `rotate(${(telemetry.busHeading * 180) / Math.PI}, ${telemetry.busX}, ${telemetry.busZ})`
+                        : `rotate(${(telemetry.busHeading * 180) / Math.PI - 180}, ${telemetry.busX}, ${telemetry.busZ})`
                     }
                   >
                     {ROAD_NETWORK.verticalX.map((vx) => (
@@ -643,7 +648,7 @@ export function GameHUD({
                     {/* Bus Arrow Marker */}
                     <g
                       transform={`translate(${telemetry.busX}, ${telemetry.busZ}) rotate(${
-                        (-telemetry.busHeading * 180) / Math.PI
+                        180 - (telemetry.busHeading * 180) / Math.PI
                       })`}
                     >
                       <polygon
@@ -857,7 +862,7 @@ export function GameHUD({
                   ? `Boarding... Tap [B] Whistle`
                   : telemetry.canOpenDoors
                     ? 'Open Doors [E]'
-                    : 'Slow < 4 km/h for Doors'}
+                    : 'Slow < 3 km/h for Doors'}
               </button>
             )}
           </div>
@@ -907,7 +912,7 @@ export function GameHUD({
               </div>
 
               <button
-                onClick={() => setShowCameraMenu((v) => !v)}
+                onClick={() => toggleMenu('camera')}
                 className="min-w-[40px] min-h-[40px] px-2.5 rounded-xl bg-sky-600/90 hover:bg-sky-500 border border-sky-300/40 cursor-pointer shadow-lg flex items-center gap-1 text-[11px] font-bold"
                 title="Switch Camera Angle [C]"
               >
@@ -963,7 +968,7 @@ export function GameHUD({
                   <button
                     onClick={() => {
                       onCycleCamera();
-                      setShowCameraMenu(false);
+                      setActiveMenu('none');
                     }}
                     className="text-sky-400 cursor-pointer"
                   >
@@ -976,9 +981,9 @@ export function GameHUD({
                     onClick={() => {
                       haptic(10);
                       onSetCameraMode(cam.id);
-                      setShowCameraMenu(false);
+                      setActiveMenu('none');
                     }}
-                    className={`w-full px-2.5 py-2 rounded-xl text-left text-xs cursor-pointer ${
+                    className={`w-full px-2.5 py-1.5 rounded-xl text-left text-xs cursor-pointer ${
                       telemetry.cameraMode === cam.id
                         ? 'bg-sky-500 text-white font-bold'
                         : 'hover:bg-white/10 text-neutral-200'
@@ -1050,12 +1055,12 @@ export function GameHUD({
                 onPointerMove={handleWheelPointerMove}
                 onPointerUp={handleWheelPointerUp}
                 onPointerCancel={handleWheelPointerUp}
-                className="relative w-32 h-32 sm:w-36 sm:h-36 rounded-full bg-neutral-950/75 border-2 border-white/20 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing shadow-2xl"
+                className="relative w-28 h-28 md:w-36 md:h-36 rounded-full bg-neutral-950/75 border-2 border-white/20 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing shadow-2xl"
                 aria-label="Virtual Steering Wheel"
               >
                 <svg
                   viewBox="0 0 120 120"
-                  className="w-28 h-28 sm:w-32 sm:h-32 pointer-events-none transition-transform duration-75"
+                  className="w-24 h-24 md:w-32 md:h-32 pointer-events-none transition-transform duration-75"
                   style={{ transform: `rotate(${-wheelSteerVisual * 210}deg)` }}
                 >
                   <circle cx="60" cy="60" r="48" fill="none" stroke="#1e293b" strokeWidth="14" />
@@ -1137,8 +1142,13 @@ export function GameHUD({
                       e.currentTarget.setPointerCapture(e.pointerId);
                       updateTouchField({ steer: 1 });
                     }}
-                    onPointerUp={() => updateTouchField({ steer: 0 })}
-                    className="w-12 h-12 rounded-xl hud-panel border border-white/20 flex items-center justify-center active:bg-emerald-600 touch-none"
+                    onPointerUp={(e) => {
+                      e.stopPropagation();
+                      updateTouchField({ steer: 0 });
+                    }}
+                    onPointerCancel={() => updateTouchField({ steer: 0 })}
+                    className="w-12 h-12 rounded-xl hud-panel border border-white/20 flex items-center justify-center active:bg-emerald-600 touch-none cursor-pointer"
+                    aria-label="Steer Left"
                   >
                     <ArrowLeft className="w-5 h-5" />
                   </button>
@@ -1148,8 +1158,13 @@ export function GameHUD({
                       e.currentTarget.setPointerCapture(e.pointerId);
                       updateTouchField({ steer: -1 });
                     }}
-                    onPointerUp={() => updateTouchField({ steer: 0 })}
-                    className="w-12 h-12 rounded-xl hud-panel border border-white/20 flex items-center justify-center active:bg-emerald-600 touch-none"
+                    onPointerUp={(e) => {
+                      e.stopPropagation();
+                      updateTouchField({ steer: 0 });
+                    }}
+                    onPointerCancel={() => updateTouchField({ steer: 0 })}
+                    className="w-12 h-12 rounded-xl hud-panel border border-white/20 flex items-center justify-center active:bg-emerald-600 touch-none cursor-pointer"
+                    aria-label="Steer Right"
                   >
                     <ArrowRight className="w-5 h-5" />
                   </button>
@@ -1159,10 +1174,10 @@ export function GameHUD({
           </div>
 
           {/* CENTER-BOTTOM: Compact Digital Dashboard Cluster + Cab Utility Drawer */}
-          <div className="pointer-events-auto relative flex flex-col items-center gap-1.5 max-w-md sm:max-w-xl">
+          <div className="pointer-events-auto relative flex flex-col items-center gap-1.5 max-w-md md:max-w-xl">
             {/* Collapsible Cab & Lights Popover Drawer */}
             {showMobileDrawer && (
-              <div className="hud-panel rounded-2xl p-2.5 w-[90vw] sm:w-[460px] mb-1 space-y-2 relative z-30">
+              <div className="hud-panel rounded-2xl p-2.5 w-[min(92vw,440px)] absolute bottom-full mb-1.5 space-y-2 z-30">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <button
                     onClick={onToggleIgnition}
@@ -1243,20 +1258,20 @@ export function GameHUD({
                     Stop [O]
                   </button>
                   <button
-                    onClick={() => setShowHornMenu((v) => !v)}
+                    onClick={() => toggleMenu('horn')}
                     className="min-h-[38px] px-2.5 py-1 rounded-lg text-[11px] font-mono bg-amber-500/20 border border-amber-400/40 text-amber-200 cursor-pointer"
                   >
                     Horn ♪{telemetry.activeHornId + 1}
                   </button>
                   <button
-                    onClick={() => setShowRadioMenu((v) => !v)}
+                    onClick={() => toggleMenu('radio')}
                     className="min-h-[38px] px-2.5 py-1 rounded-lg text-[11px] font-bold bg-white/5 border border-white/10 text-neutral-200 flex items-center gap-1 cursor-pointer"
                   >
                     <Radio className="w-3.5 h-3.5 text-amber-400" />
                     {activeStation.freq === '---' ? 'FM' : activeStation.freq}
                   </button>
                   <button
-                    onClick={() => setShowCabMenu((v) => !v)}
+                    onClick={() => toggleMenu('cab')}
                     className="min-h-[38px] px-2.5 py-1 rounded-lg text-[11px] font-bold bg-white/5 border border-white/10 text-neutral-200 flex items-center gap-1 cursor-pointer"
                   >
                     <SlidersHorizontal className="w-3.5 h-3.5" />
@@ -1308,14 +1323,14 @@ export function GameHUD({
 
             {/* Horn Selector Popup */}
             {showHornMenu && (
-              <div className="w-56 p-2 rounded-xl bg-neutral-950 border border-white/15 shadow-2xl space-y-1 z-40">
+              <div className="w-56 p-2 rounded-xl bg-neutral-950 border border-white/15 shadow-2xl space-y-1 z-40 absolute bottom-full mb-1.5">
                 {HORN_OPTIONS.map((h) => (
                   <button
                     key={h.id}
                     onClick={() => {
                       onSelectHorn(h.id);
                       onAirHorn();
-                      setShowHornMenu(false);
+                      setActiveMenu('none');
                     }}
                     className={`w-full px-2.5 py-1.5 rounded-lg text-left text-xs flex justify-between cursor-pointer ${
                       telemetry.activeHornId === h.id
@@ -1332,13 +1347,13 @@ export function GameHUD({
 
             {/* FM Radio Popup */}
             {showRadioMenu && (
-              <div className="w-60 p-2 rounded-xl bg-neutral-950 border border-white/15 shadow-2xl space-y-1 z-40">
+              <div className="w-60 p-2 rounded-xl bg-neutral-950 border border-white/15 shadow-2xl space-y-1 z-40 absolute bottom-full mb-1.5">
                 {FM_RADIO_STATIONS.map((st) => (
                   <button
                     key={st.id}
                     onClick={() => {
                       onSelectRadio(st.id);
-                      setShowRadioMenu(false);
+                      setActiveMenu('none');
                     }}
                     className={`w-full px-2.5 py-1.5 rounded-lg text-left text-xs cursor-pointer ${
                       telemetry.radioStationId === st.id
@@ -1357,7 +1372,7 @@ export function GameHUD({
 
             {/* Seat & Mirror Popup */}
             {showCabMenu && (
-              <div className="w-56 p-2.5 rounded-xl bg-neutral-950 border border-white/15 shadow-2xl space-y-2 z-40 text-xs">
+              <div className="w-56 p-2.5 rounded-xl bg-neutral-950 border border-white/15 shadow-2xl space-y-2 z-40 text-xs absolute bottom-full mb-1.5">
                 <div className="font-bold text-neutral-300">Driver Seat &amp; Mirror</div>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[11px] text-neutral-400">Seat Height</span>
@@ -1413,7 +1428,7 @@ export function GameHUD({
                 {telemetry.gear}
               </div>
 
-              <div className="hidden sm:grid grid-cols-4 gap-2.5 text-[10px] min-w-[200px]">
+              <div className="hidden md:grid grid-cols-4 gap-2.5 text-[10px] min-w-[200px]">
                 <div>
                   <div className="text-neutral-400">RPM</div>
                   <div className="font-mono text-white tabular-nums">{telemetry.rpm}</div>
@@ -1437,7 +1452,7 @@ export function GameHUD({
               <button
                 onClick={() => {
                   haptic(8);
-                  setShowMobileDrawer((v) => !v);
+                  toggleMenu('drawer');
                 }}
                 className={`min-h-[38px] px-2.5 py-1 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer ${
                   showMobileDrawer
@@ -1476,7 +1491,7 @@ export function GameHUD({
                 onPointerCancel={handleHornUp}
                 onContextMenu={(e) => {
                   e.preventDefault();
-                  setShowHornMenu((v) => !v);
+                  toggleMenu('horn');
                 }}
                 className={`min-w-[48px] min-h-[42px] px-2.5 rounded-xl border text-xs font-black flex items-center justify-center gap-1 touch-none cursor-pointer ${
                   pedalPressed.horn

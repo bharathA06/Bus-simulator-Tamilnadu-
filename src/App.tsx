@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { MotionConfig } from 'motion/react';
-import { Power, RefreshCw, RotateCw, X } from 'lucide-react';
+import { Maximize2, Power, RefreshCw, RotateCw } from 'lucide-react';
 import { GameEngine, GameTelemetry } from './game/gameEngine';
 import { CanvasEngine } from './game/canvasEngine';
 import {
@@ -73,7 +73,7 @@ interface SimulatorEngine {
   setCustomization: (c: BusCustomization) => void;
   setGameMode: (mode: GameMode) => void;
   setShowcaseOrbit: (active: boolean) => void;
-  applySettings: (settings: GameSettings) => void;
+  applySettings: (settings: GameSettings, applyDefaultCamera?: boolean) => void;
   applyUpgrades: (equippedIds: string[]) => void;
   playAirHorn: () => void;
   startAirHorn: () => void;
@@ -142,7 +142,6 @@ export default function App() {
   const [isPortrait, setIsPortrait] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : false
   );
-  const [dismissRotateHint, setDismissRotateHint] = useState<boolean>(false);
   const [gameOverData, setGameOverData] = useState<{
     isVictory: boolean;
     earnings: number;
@@ -185,6 +184,15 @@ export default function App() {
   const lastTimeOfDayRef = useRef<TimeOfDayId>(progress.settings.preferredTimeOfDay);
   const [dailyMissionBanner, setDailyMissionBanner] = useState<string | null>(null);
   const bannerTimeoutRef = useRef<number | null>(null);
+  const prevDefaultCameraRef = useRef<number>(progress.settings.defaultCamera);
+  const prevCompletedMissionsRef = useRef<{ dateKey: string; completedIds: Set<DailyMissionMetric> }>({
+    dateKey: progress.dailyMissions.dateKey,
+    completedIds: new Set(
+      progress.dailyMissions.missions
+        .filter((m) => m.progress >= getMissionDef(m.id).target)
+        .map((m) => m.id)
+    ),
+  });
 
   const showMissionBanner = useCallback((ids: DailyMissionMetric[]) => {
     if (ids.length === 0) return;
@@ -193,6 +201,33 @@ export default function App() {
     if (bannerTimeoutRef.current) window.clearTimeout(bannerTimeoutRef.current);
     bannerTimeoutRef.current = window.setTimeout(() => setDailyMissionBanner(null), 5000);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (bannerTimeoutRef.current) window.clearTimeout(bannerTimeoutRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const dm = progress.dailyMissions;
+    const currentCompleted = new Set<DailyMissionMetric>(
+      dm.missions.filter((m) => m.progress >= getMissionDef(m.id).target).map((m) => m.id)
+    );
+    if (prevCompletedMissionsRef.current.dateKey !== dm.dateKey) {
+      prevCompletedMissionsRef.current = { dateKey: dm.dateKey, completedIds: currentCompleted };
+      return;
+    }
+    const newlyCompleted: DailyMissionMetric[] = [];
+    currentCompleted.forEach((id) => {
+      if (!prevCompletedMissionsRef.current.completedIds.has(id)) {
+        newlyCompleted.push(id);
+      }
+    });
+    prevCompletedMissionsRef.current = { dateKey: dm.dateKey, completedIds: currentCompleted };
+    if (newlyCompleted.length > 0) {
+      showMissionBanner(newlyCompleted);
+    }
+  }, [progress.dailyMissions, showMissionBanner]);
 
   const initialStop = BUS_STOPS[0];
   const [telemetry, setTelemetry] = useState<GameTelemetry>({
@@ -324,18 +359,10 @@ export default function App() {
           livePaxAccumRef.current = 0;
           lastLiveMissionFlushRef.current = nowMs;
 
-          let completedIds: DailyMissionMetric[] = [];
-          updateProgress((prev) => {
-            const res = applyLiveDrivingToMissions(prev.dailyMissions, addKm, addPax);
-            completedIds = res.newlyCompletedIds;
-            return {
-              ...prev,
-              dailyMissions: res.nextState,
-            };
-          });
-          if (completedIds.length > 0) {
-            showMissionBanner(completedIds);
-          }
+          updateProgress((prev) => ({
+            ...prev,
+            dailyMissions: applyLiveDrivingToMissions(prev.dailyMissions, addKm, addPax).nextState,
+          }));
         }
       }
 
@@ -356,7 +383,7 @@ export default function App() {
         }
       }
     },
-    [showMissionBanner, updateProgress]
+    [updateProgress]
   );
 
   const handleRouteFinish = useCallback(
@@ -510,11 +537,15 @@ export default function App() {
     });
   }, [updateProgress]);
 
-  // Track device portrait vs landscape orientation
+  // Track device portrait vs landscape orientation and attempt automatic landscape lock
   useEffect(() => {
     const checkOrientation = () => {
       setIsPortrait(window.innerHeight > window.innerWidth);
     };
+    const orientationApi = window.screen?.orientation as unknown as {
+      lock?: (orientation: string) => Promise<void>;
+    } | undefined;
+    orientationApi?.lock?.('landscape').catch(() => {});
     window.addEventListener('resize', checkOrientation);
     window.addEventListener('orientationchange', checkOrientation);
     return () => {
@@ -574,7 +605,7 @@ export default function App() {
     }
 
     engineRef.current = engine;
-    engine.applySettings(progress.settings);
+    engine.applySettings(progress.settings, true);
     engine.applyUpgrades(progress.equippedUpgrades);
     engine.setCustomization(activeCustom);
     engine.setCondition(progress.vehicleHealthPct, progress.dirtinessPct);
@@ -608,7 +639,9 @@ export default function App() {
 
   useEffect(() => {
     if (!engineRef.current) return;
-    engineRef.current.applySettings(progress.settings);
+    const defaultCameraChanged = prevDefaultCameraRef.current !== progress.settings.defaultCamera;
+    prevDefaultCameraRef.current = progress.settings.defaultCamera;
+    engineRef.current.applySettings(progress.settings, defaultCameraChanged);
   }, [progress.settings]);
 
   useEffect(() => {
@@ -616,11 +649,15 @@ export default function App() {
     engineRef.current.setCondition(progress.vehicleHealthPct, progress.dirtinessPct);
   }, [progress.vehicleHealthPct, progress.dirtinessPct, screen]);
 
-  // Sync Engine Pause, Showcase Orbit, Daily Mission Rollover & Buffered Live Deltas with ScreenState
+  // Sync Engine Pause, Showcase Orbit, Replay/Audio Standby, Daily Mission Rollover & Buffered Live Deltas with ScreenState
   useEffect(() => {
+    busAudio.setStandbyPaused(screen === 'EXITED');
     if (!engineRef.current) return;
     engineRef.current.setPaused(screen !== 'PLAYING');
     engineRef.current.setShowcaseOrbit(screen === 'MAIN_MENU' || screen === 'GARAGE');
+    if (screen !== 'PLAYING' && screen !== 'PAUSED') {
+      engineRef.current.stopReplay();
+    }
 
     if (screen !== 'PLAYING' && (liveCbtKmAccumRef.current > 0 || livePaxAccumRef.current > 0)) {
       const addKm = liveCbtKmAccumRef.current;
@@ -650,7 +687,12 @@ export default function App() {
     const handleKey = (e: KeyboardEvent) => {
       if (e.code === 'Escape') {
         if (screen === 'PLAYING') {
-          setScreen('PAUSED');
+          if (telemetry.isReplaying) {
+            engineRef.current?.stopReplay();
+            setScreen('GAMEOVER');
+          } else {
+            setScreen('PAUSED');
+          }
         } else if (screen === 'PAUSED') {
           setScreen('PLAYING');
         } else if (
@@ -667,7 +709,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [screen]);
+  }, [screen, telemetry.isReplaying]);
 
   const handleToggleMute = () => {
     const nextMute = !isMuted;
@@ -690,8 +732,11 @@ export default function App() {
     route: RouteDefinition,
     timeOfDay: TimeOfDayId,
     weather: WeatherId,
-    trafficDensity?: TrafficDensity
+    trafficDensity?: TrafficDensity,
+    modeOverride?: GameMode
   ) => {
+    const effectiveMode = modeOverride ?? activeMode;
+    setActiveMode(effectiveMode);
     setSelectedRoute(route);
     const nextTrafficDensity = trafficDensity ?? progress.settings.trafficDensity;
     updateProgress((prev) => ({
@@ -710,15 +755,19 @@ export default function App() {
     livePaxAccumRef.current = 0;
 
     if (engineRef.current) {
-      engineRef.current.setGameMode(activeMode);
+      engineRef.current.stopReplay();
+      engineRef.current.setGameMode(effectiveMode);
       engineRef.current.setCustomization(activeCustom);
       engineRef.current.setLivery(activeLivery);
-      engineRef.current.applySettings({
-        ...progress.settings,
-        preferredTimeOfDay: timeOfDay,
-        preferredWeather: weather,
-        trafficDensity: nextTrafficDensity,
-      });
+      engineRef.current.applySettings(
+        {
+          ...progress.settings,
+          preferredTimeOfDay: timeOfDay,
+          preferredWeather: weather,
+          trafficDensity: nextTrafficDensity,
+        },
+        true
+      );
       engineRef.current.applyUpgrades(progress.equippedUpgrades);
       engineRef.current.setRoute(route);
       engineRef.current.setCondition(progress.vehicleHealthPct, progress.dirtinessPct);
@@ -857,34 +906,50 @@ export default function App() {
     setScreen('GAMEOVER');
   };
 
-  const showLandscapeHint =
-    progress.settings.orientationPreference === 'landscape' &&
-    isPortrait &&
-    !dismissRotateHint &&
-    screen !== 'INTRO' &&
-    screen !== 'LOADING';
+  const handleLockLandscape = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      }
+      const orientationApi = window.screen?.orientation as unknown as {
+        lock?: (orientation: string) => Promise<void>;
+      } | undefined;
+      await orientationApi?.lock?.('landscape');
+    } catch {
+      // Ignore browser orientation lock restrictions
+    }
+  };
 
   return (
     <MotionConfig reducedMotion="user">
-      <main className="relative w-screen h-screen overflow-hidden bg-neutral-950 font-sans">
+      <main className="relative w-screen h-[100dvh] max-h-[100dvh] overflow-hidden bg-neutral-950 font-sans">
         {/* Persistent Live 3D / 2D Simulation Viewport */}
         <div ref={canvasMountRef} className="absolute inset-0 w-full h-full z-0 pointer-events-auto" />
 
         {/* PWA Offline Notice */}
         <OfflineIndicator />
 
-        {/* Non-blocking Mobile Landscape Orientation Hint */}
-        {showLandscapeHint && (
-          <div className="fixed top-2 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-xl bg-neutral-900/95 border border-amber-400/50 text-amber-200 text-[11px] font-bold flex items-center gap-2 shadow-xl">
-            <RotateCw className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span>Rotate phone to Landscape for best cockpit view</span>
-            <button
-              onClick={() => setDismissRotateHint(true)}
-              className="p-0.5 rounded hover:bg-white/10 text-neutral-400 hover:text-white cursor-pointer"
-              aria-label="Dismiss orientation hint"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+        {/* Fixed Landscape Orientation Guard when device is held vertically */}
+        {isPortrait && (
+          <div className="fixed inset-0 z-[100] bg-neutral-950/98 backdrop-blur-xl flex items-center justify-center p-6 text-white select-none overflow-hidden">
+            <div className="max-w-sm w-full rounded-2xl bg-neutral-900 border border-amber-400/40 p-6 text-center space-y-4 shadow-2xl">
+              <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-400/35 flex items-center justify-center mx-auto">
+                <RotateCw className="w-7 h-7 text-amber-400" />
+              </div>
+              <div>
+                <h2 className="text-lg font-black tracking-tight">Rotate Device to Landscape</h2>
+                <p className="text-xs text-neutral-300 mt-1.5 leading-relaxed">
+                  Tamil Nadu Bus Simulator runs on a fixed landscape screen with zero scrolling for full cockpit visibility and touch controls.
+                </p>
+              </div>
+              <button
+                onClick={handleLockLandscape}
+                className="w-full min-h-[44px] py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-black inline-flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Maximize2 className="w-4 h-4" />
+                Lock Landscape Fullscreen
+              </button>
+            </div>
           </div>
         )}
 
@@ -929,6 +994,7 @@ export default function App() {
             initialTimeOfDay={progress.settings.preferredTimeOfDay}
             initialWeather={progress.settings.preferredWeather}
             initialTrafficDensity={progress.settings.trafficDensity ?? 'normal'}
+            onChangeMode={setActiveMode}
             onBack={() => setScreen('MAIN_MENU')}
             onLaunchDrive={handleLaunchDrive}
           />
@@ -967,8 +1033,7 @@ export default function App() {
             onRepairBus={handleGarageRepair}
             onWashBus={handleGarageWash}
             onLaunchScheduledRoute={(route, tod, w) => {
-              setActiveMode('career');
-              handleLaunchDrive(route, tod, w);
+              handleLaunchDrive(route, tod, w, undefined, 'career');
             }}
             onOpenGarage={() => setScreen('GARAGE')}
             onClaimDailyMission={handleClaimDailyMission}
@@ -982,8 +1047,7 @@ export default function App() {
             progress={progress}
             onBack={() => setScreen('MAIN_MENU')}
             onLaunchConvoy={(route, tod, w) => {
-              setActiveMode('free');
-              handleLaunchDrive(route, tod, w);
+              handleLaunchDrive(route, tod, w, undefined, 'free');
             }}
           />
         )}
@@ -1057,8 +1121,14 @@ export default function App() {
           isOpen={screen === 'PAUSED'}
           onResume={() => setScreen('PLAYING')}
           onRestart={handleRestart}
-          onOpenMap={() => setScreen('MAP_PLANNER')}
-          onExitToMenu={() => setScreen('MAIN_MENU')}
+          onOpenMap={() => {
+            engineRef.current?.stopReplay();
+            setScreen('MAP_PLANNER');
+          }}
+          onExitToMenu={() => {
+            engineRef.current?.stopReplay();
+            setScreen('MAIN_MENU');
+          }}
           route={selectedRoute}
           livery={activeLivery}
           gameMode={activeMode}

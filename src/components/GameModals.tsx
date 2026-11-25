@@ -44,6 +44,7 @@ export function PauseModal({
   onChangeTraffic,
 }: PauseModalProps) {
   const [confirmExit, setConfirmExit] = useState(false);
+  const [tab, setTab] = useState<'session' | 'keys'>('session');
 
   if (!isOpen) return null;
 
@@ -59,116 +60,133 @@ export function PauseModal({
     ['T / U', 'Refuel / Tea Break'],
     ['M / O', 'FM Radio / Announce'],
     ['Y / C', 'Mirror / 7 Cameras'],
-    ['Drag', 'Look Around Viewport'],
-    ['L / J', 'Lights / High Beam'],
-    ['Q / Z / X', 'Indicators / Hazard'],
-    ['H / P / V / K', 'Horn/Wipe/CC/Weather'],
+    ['L / J / H', 'Lights / Beam / Horn'],
   ];
 
   return (
-    <div className="fixed inset-0 z-40 bg-neutral-950/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto select-none">
-      <div className="w-full max-w-2xl rounded-2xl bg-neutral-900 border border-white/15 shadow-2xl overflow-hidden text-white my-auto">
-        <div className="px-5 py-4 bg-neutral-950 border-b border-white/10 flex items-center justify-between">
-          <div>
-            <span className="text-[10px] font-mono uppercase tracking-widest text-amber-400">
+    <div className="fixed inset-0 h-[100dvh] z-40 bg-neutral-950/85 backdrop-blur-md flex items-center justify-center p-2.5 sm:p-4 overflow-hidden select-none">
+      <div className="w-full max-w-2xl rounded-2xl bg-neutral-900 border border-white/15 shadow-2xl overflow-hidden text-white">
+        <div className="px-4 py-2.5 bg-neutral-950 border-b border-white/10 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-amber-400 block truncate">
               Tamil Nadu Bus Simulator · {gameMode === 'career' ? 'Career Trip' : 'Free Roam'}
             </span>
-            <h2 className="text-lg sm:text-xl font-black mt-0.5">Simulation Paused</h2>
+            <h2 className="text-sm sm:text-lg font-black leading-tight">Simulation Paused</h2>
           </div>
-          <button
-            onClick={() => {
-              setConfirmExit(false);
-              onResume();
-            }}
-            className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-white/10 hover:bg-white/20 text-neutral-300 flex items-center justify-center cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="grid grid-cols-2 gap-1 p-0.5 rounded-lg bg-neutral-900 border border-white/10">
+              <button
+                onClick={() => setTab('session')}
+                className={`min-h-[30px] px-2.5 rounded-md text-[11px] font-bold cursor-pointer ${
+                  tab === 'session' ? 'bg-emerald-600 text-white' : 'text-neutral-300 hover:bg-white/5'
+                }`}
+              >
+                Session
+              </button>
+              <button
+                onClick={() => setTab('keys')}
+                className={`min-h-[30px] px-2.5 rounded-md text-[11px] font-bold cursor-pointer ${
+                  tab === 'keys' ? 'bg-amber-500 text-neutral-950' : 'text-neutral-300 hover:bg-white/5'
+                }`}
+              >
+                Controls
+              </button>
+            </div>
+            <button
+              onClick={() => {
+                setConfirmExit(false);
+                onResume();
+              }}
+              className="min-h-[36px] min-w-[36px] p-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-neutral-300 flex items-center justify-center cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        <div className="p-5 space-y-4">
-          <div className="p-3.5 rounded-xl bg-white/5 border border-white/10 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div className="text-xs font-bold text-emerald-400">
-                Route {route.code}: {route.titleEn}
+        <div className="p-3 sm:p-4 space-y-2.5 sm:space-y-3">
+          {tab === 'session' ? (
+            <>
+              <div className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-bold text-emerald-400 truncate">
+                    Route {route.code}: {route.titleEn}
+                  </div>
+                  <div className="text-[11px] text-neutral-400 truncate">{livery.name}</div>
+                </div>
+                <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-white/10 text-neutral-200 shrink-0">
+                  {livery.defaultReg}
+                </span>
               </div>
-              <div className="text-[11px] text-neutral-400">{livery.name}</div>
-            </div>
-            <span className="text-xs font-mono px-2.5 py-1 rounded bg-white/10 text-neutral-200">
-              {livery.defaultReg}
-            </span>
-          </div>
 
-          <div className="p-3.5 rounded-xl bg-neutral-950 border border-white/10 space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-neutral-300">
-                Live Road Traffic Control
-              </span>
-              <div className="flex items-center gap-1">
-                {(['calm', 'normal', 'fast'] as TrafficSpeedMode[]).map((sp) => (
-                  <button
-                    key={sp}
-                    onClick={() => onChangeTraffic(trafficDensity, sp)}
-                    className={`min-h-[32px] px-2.5 rounded-lg text-[11px] font-bold capitalize border cursor-pointer ${
-                      trafficSpeed === sp
-                        ? 'bg-emerald-600 border-emerald-400 text-white'
-                        : 'bg-white/5 border-white/10 text-neutral-400 hover:bg-white/10'
-                    }`}
-                  >
-                    {sp}
-                  </button>
-                ))}
+              <div className="p-3 rounded-xl bg-neutral-950 border border-white/10 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-300">
+                    Live Road Traffic Control
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {(['calm', 'normal', 'fast'] as TrafficSpeedMode[]).map((sp) => (
+                      <button
+                        key={sp}
+                        onClick={() => onChangeTraffic(trafficDensity, sp)}
+                        className={`min-h-[28px] px-2.5 rounded-lg text-[10px] font-bold capitalize border cursor-pointer ${
+                          trafficSpeed === sp
+                            ? 'bg-emerald-600 border-emerald-400 text-white'
+                            : 'bg-white/5 border-white/10 text-neutral-400 hover:bg-white/10'
+                        }`}
+                      >
+                        {sp}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {([
+                    { id: 'off', label: 'Off (0)' },
+                    { id: 'light', label: 'Light' },
+                    { id: 'normal', label: 'Normal' },
+                    { id: 'heavy', label: 'Heavy' },
+                    { id: 'rush', label: 'Rush' },
+                  ] as { id: TrafficDensity; label: string }[]).map((td) => (
+                    <button
+                      key={td.id}
+                      onClick={() => onChangeTraffic(td.id, trafficSpeed)}
+                      className={`min-h-[34px] rounded-lg text-[11px] font-bold border cursor-pointer ${
+                        trafficDensity === td.id
+                          ? 'bg-amber-500 text-neutral-950 border-amber-300'
+                          : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
+                      }`}
+                    >
+                      {td.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-            <div className="grid grid-cols-5 gap-1.5">
-              {([
-                { id: 'off', label: 'Off (0)' },
-                { id: 'light', label: 'Light' },
-                { id: 'normal', label: 'Normal' },
-                { id: 'heavy', label: 'Heavy' },
-                { id: 'rush', label: 'Rush' },
-              ] as { id: TrafficDensity; label: string }[]).map((td) => (
-                <button
-                  key={td.id}
-                  onClick={() => onChangeTraffic(td.id, trafficSpeed)}
-                  className={`min-h-[38px] rounded-lg text-xs font-bold border cursor-pointer ${
-                    trafficDensity === td.id
-                      ? 'bg-amber-500 text-neutral-950 border-amber-300'
-                      : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
-                  }`}
-                >
-                  {td.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div className="text-xs font-bold uppercase tracking-wider text-neutral-400 mb-2">
-              Controls Quick Reference
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 text-xs">
+            </>
+          ) : (
+            <div className="grid grid-cols-3 gap-1.5 text-[11px]">
               {keyBindings.map(([key, action]) => (
                 <div
                   key={key}
-                  className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-neutral-950 border border-white/10"
+                  className="flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg bg-neutral-950 border border-white/10"
                 >
-                  <span className="font-mono font-bold text-amber-300">{key}</span>
+                  <span className="font-mono font-bold text-amber-300 shrink-0">{key}</span>
                   <span className="text-neutral-300 truncate">{action}</span>
                 </div>
               ))}
             </div>
-          </div>
+          )}
 
           {confirmExit ? (
-            <div className="p-4 rounded-xl bg-red-950/50 border border-red-500/40 flex flex-wrap items-center justify-between gap-3">
+            <div className="p-3 rounded-xl bg-red-950/50 border border-red-500/40 flex items-center justify-between gap-3">
               <span className="text-xs font-bold text-red-100">
-                Exit current trip and return to Main Menu? Unfinished fares will not be saved.
+                Exit trip and return to Main Menu? Unfinished fares will not be saved.
               </span>
-              <div className="flex items-center gap-2 ml-auto">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   onClick={() => setConfirmExit(false)}
-                  className="min-h-[44px] px-4 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold cursor-pointer"
+                  className="min-h-[36px] px-3 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -177,41 +195,41 @@ export function PauseModal({
                     setConfirmExit(false);
                     onExitToMenu();
                   }}
-                  className="min-h-[44px] px-4 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-black cursor-pointer"
+                  className="min-h-[36px] px-3 rounded-xl bg-red-600 hover:bg-red-500 text-xs font-black cursor-pointer"
                 >
-                  Confirm Exit
+                  Exit
                 </button>
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+            <div className="grid grid-cols-4 gap-2 pt-0.5">
               <button
                 onClick={onResume}
-                className="min-h-[44px] py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                className="min-h-[40px] py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-black text-xs flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Play className="w-4 h-4 fill-current" />
                 Resume
               </button>
               <button
                 onClick={onRestart}
-                className="min-h-[44px] py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                className="min-h-[40px] py-2 px-3 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <RefreshCw className="w-4 h-4" />
                 Restart
               </button>
               <button
                 onClick={onOpenMap}
-                className="min-h-[44px] py-2.5 px-4 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                className="min-h-[40px] py-2 px-3 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Map className="w-4 h-4" />
                 GPS Map
               </button>
               <button
                 onClick={() => setConfirmExit(true)}
-                className="min-h-[44px] py-2.5 px-4 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                className="min-h-[40px] py-2 px-3 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-200 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Home className="w-4 h-4" />
-                Main Menu
+                Menu
               </button>
             </div>
           )}
@@ -269,141 +287,148 @@ export function GameOverModal({
   const netProfit = earnings - fuelSpent - tollsPaid;
 
   return (
-    <div className="fixed inset-0 z-40 bg-neutral-950/85 backdrop-blur-md flex items-center justify-center p-4 overflow-y-auto select-none">
-      <div className="w-full max-w-lg rounded-2xl bg-neutral-900 border border-white/15 shadow-2xl overflow-hidden text-white my-auto">
+    <div className="fixed inset-0 h-[100dvh] z-40 bg-neutral-950/85 backdrop-blur-md flex items-center justify-center p-2.5 sm:p-4 overflow-hidden select-none">
+      <div className="w-full max-w-4xl rounded-2xl bg-neutral-900 border border-white/15 shadow-2xl overflow-hidden text-white">
+        {/* Compact Header */}
         <div
-          className={`px-6 py-5 border-b border-white/10 flex items-center gap-3.5 ${
+          className={`px-4 py-2.5 border-b border-white/10 flex items-center justify-between gap-3 ${
             isVictory ? 'bg-emerald-950/60' : 'bg-red-950/50'
           }`}
         >
-          <div
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${
-              isVictory ? 'bg-emerald-500 text-neutral-950' : 'bg-red-500/20 text-red-400'
-            }`}
-          >
-            {isVictory ? <Trophy className="w-6 h-6" /> : <Compass className="w-6 h-6" />}
-          </div>
-          <div>
-            <div className="text-[11px] font-mono uppercase tracking-wider text-amber-300">
-              Tamil Nadu Bus Simulator · {route.code}
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div
+              className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                isVictory ? 'bg-emerald-500 text-neutral-950' : 'bg-red-500/20 text-red-400'
+              }`}
+            >
+              {isVictory ? <Trophy className="w-5 h-5" /> : <Compass className="w-5 h-5" />}
             </div>
-            <h2 className="text-xl font-black">
-              {isVictory ? 'Terminal Reached — Trip Settled!' : 'Schedule Time Expired'}
-            </h2>
+            <div className="min-w-0">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-amber-300 truncate">
+                {route.code} · {route.titleEn}
+              </div>
+              <h2 className="text-sm sm:text-lg font-black leading-tight truncate">
+                {isVictory ? 'Terminal Reached — Trip Settled!' : 'Schedule Time Expired'}
+              </h2>
+            </div>
+          </div>
+
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 shrink-0">
+            <Award className="w-4 h-4 text-amber-400" />
+            <span>
+              Rank: <strong className="text-white">{newRank}</strong>
+            </span>
           </div>
         </div>
 
-        <div className="p-6 space-y-4">
-          <div className="text-xs text-neutral-300">{route.titleEn}</div>
-
-          {/* Trip Settlement Breakdown */}
-          <div className="rounded-xl bg-neutral-950 border border-white/10 p-4 space-y-2 text-xs">
-            <div className="flex justify-between">
-              <span className="text-neutral-400">Gross Fares &amp; Completion Bonus</span>
-              <span className="font-mono font-bold text-emerald-400 tabular-nums">
-                +₹{earnings.toLocaleString('en-IN')}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-neutral-400">Diesel Bunk Refueling</span>
-              <span className="font-mono font-bold text-red-400 tabular-nums">
-                -₹{fuelSpent.toLocaleString('en-IN')}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-neutral-400">FASTag Highway Tolls</span>
-              <span className="font-mono font-bold text-red-400 tabular-nums">
-                -₹{tollsPaid.toLocaleString('en-IN')}
-              </span>
-            </div>
-            <div className="pt-2 border-t border-white/10 flex justify-between text-sm font-black">
-              <span>Net Trip Settlement</span>
-              <span
-                className={`font-mono tabular-nums ${
-                  netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'
-                }`}
-              >
-                {netProfit >= 0 ? `+₹${netProfit}` : `-₹${Math.abs(netProfit)}`}
-              </span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2.5 text-center">
-            <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-              <div className="text-[10px] text-neutral-400">Passenger Rating</div>
-              <div className="text-base font-black text-amber-400 font-mono tabular-nums mt-0.5">
-                {satisfaction}%
+        {/* Horizontal 2-Column Settlement Body */}
+        <div className="p-3 sm:p-4 grid grid-cols-12 gap-3 sm:gap-4 items-center">
+          {/* Left: Ledger & Metrics */}
+          <div className="col-span-6 space-y-2">
+            <div className="rounded-xl bg-neutral-950 border border-white/10 p-3 space-y-1.5 text-xs">
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Gross Fares &amp; Bonus</span>
+                <span className="font-mono font-bold text-emerald-400 tabular-nums">
+                  +₹{earnings.toLocaleString('en-IN')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">Diesel Bunk Refueling</span>
+                <span className="font-mono font-bold text-red-400 tabular-nums">
+                  -₹{fuelSpent.toLocaleString('en-IN')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-neutral-400">FASTag Highway Tolls</span>
+                <span className="font-mono font-bold text-red-400 tabular-nums">
+                  -₹{tollsPaid.toLocaleString('en-IN')}
+                </span>
+              </div>
+              <div className="pt-1.5 border-t border-white/10 flex justify-between text-xs sm:text-sm font-black">
+                <span>Net Trip Settlement</span>
+                <span
+                  className={`font-mono tabular-nums ${
+                    netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'
+                  }`}
+                >
+                  {netProfit >= 0 ? `+₹${netProfit}` : `-₹${Math.abs(netProfit)}`}
+                </span>
               </div>
             </div>
-            <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-              <div className="text-[10px] text-neutral-400">XP Gained</div>
-              <div className="text-base font-black text-sky-400 font-mono tabular-nums mt-0.5">
-                +{xpEarned} XP
+
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="p-2 rounded-xl bg-white/5 border border-white/10">
+                <div className="text-[10px] text-neutral-400">Rating</div>
+                <div className="text-xs sm:text-sm font-black text-amber-400 font-mono tabular-nums">
+                  {satisfaction}%
+                </div>
+              </div>
+              <div className="p-2 rounded-xl bg-white/5 border border-white/10">
+                <div className="text-[10px] text-neutral-400">XP Gained</div>
+                <div className="text-xs sm:text-sm font-black text-sky-400 font-mono tabular-nums">
+                  +{xpEarned} XP
+                </div>
+              </div>
+              <div className="p-2 rounded-xl bg-white/5 border border-white/10">
+                <div className="text-[10px] text-neutral-400">Mode</div>
+                <div className="text-xs font-black text-white uppercase mt-0.5">{gameMode}</div>
               </div>
             </div>
-            <div className="p-3 rounded-xl bg-white/5 border border-white/10">
-              <div className="text-[10px] text-neutral-400">Mode</div>
-              <div className="text-xs font-black text-white uppercase mt-1">{gameMode}</div>
-            </div>
-          </div>
 
-          <div className="flex items-center gap-2 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
-            <Award className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>
-              Current Rank: <strong className="text-white">{newRank}</strong>
-            </span>
-          </div>
-
-          {dailyMissions && onClaimDailyMission && onClaimDailySweep && (
-            <DailyMissionsPanel
-              dailyMissions={dailyMissions}
-              onClaimMission={onClaimDailyMission}
-              onClaimSweepBonus={onClaimDailySweep}
-              variant="compact"
-            />
-          )}
-
-          {hasReplay && onWatchReplay && (
-            <button
-              onClick={onWatchReplay}
-              className="w-full py-2.5 px-4 rounded-xl bg-sky-600/25 hover:bg-sky-600/40 border border-sky-400/50 text-sky-200 font-black text-xs flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Film className="w-4 h-4" />
-              Watch Trip Replay
-            </button>
-          )}
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
-            {isVictory && (
+            {hasReplay && onWatchReplay && (
               <button
-                onClick={onNextRoute}
-                className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-black text-xs flex items-center justify-center gap-1 cursor-pointer"
+                onClick={onWatchReplay}
+                className="w-full min-h-[36px] py-1.5 px-3 rounded-xl bg-sky-600/25 hover:bg-sky-600/40 border border-sky-400/50 text-sky-200 font-black text-xs flex items-center justify-center gap-2 cursor-pointer"
               >
-                <Check className="w-4 h-4" />
-                Next Route
+                <Film className="w-4 h-4" />
+                Watch Trip Replay
               </button>
             )}
-            <button
-              onClick={onRetry}
-              className="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1 cursor-pointer"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Drive Again
-            </button>
-            <button
-              onClick={onOpenMap}
-              className="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1 cursor-pointer"
-            >
-              <Map className="w-4 h-4" />
-              GPS Map
-            </button>
-            <button
-              onClick={onExitToMenu}
-              className="py-2.5 px-3 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-xs flex items-center justify-center gap-1 cursor-pointer"
-            >
-              <Home className="w-4 h-4" />
-              Menu
-            </button>
+          </div>
+
+          {/* Right: Daily Missions + Action Buttons */}
+          <div className="col-span-6 space-y-2.5">
+            {dailyMissions && onClaimDailyMission && onClaimDailySweep && (
+              <DailyMissionsPanel
+                dailyMissions={dailyMissions}
+                onClaimMission={onClaimDailyMission}
+                onClaimSweepBonus={onClaimDailySweep}
+                variant="compact"
+              />
+            )}
+
+            <div className={`grid gap-2 ${isVictory ? 'grid-cols-4' : 'grid-cols-3'}`}>
+              {isVictory && (
+                <button
+                  onClick={onNextRoute}
+                  className="min-h-[38px] py-2 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-black text-[11px] sm:text-xs flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  Next
+                </button>
+              )}
+              <button
+                onClick={onRetry}
+                className="min-h-[38px] py-2 px-2 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                Retry
+              </button>
+              <button
+                onClick={onOpenMap}
+                className="min-h-[38px] py-2 px-2 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Map className="w-3.5 h-3.5" />
+                Map
+              </button>
+              <button
+                onClick={onExitToMenu}
+                className="min-h-[38px] py-2 px-2 rounded-xl bg-white/10 hover:bg-white/20 font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1 cursor-pointer"
+              >
+                <Home className="w-3.5 h-3.5" />
+                Menu
+              </button>
+            </div>
           </div>
         </div>
       </div>

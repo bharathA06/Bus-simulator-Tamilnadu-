@@ -2,6 +2,8 @@ import { useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowUp,
+  ChevronLeft,
+  ChevronRight,
   Clock,
   Cloud,
   CloudFog,
@@ -10,7 +12,6 @@ import {
   CornerUpLeft,
   CornerUpRight,
   Flag,
-  Fuel,
   LocateFixed,
   Lock,
   MapPin,
@@ -45,6 +46,7 @@ interface InteractiveMapScreenProps {
   initialTimeOfDay: TimeOfDayId;
   initialWeather: WeatherId;
   initialTrafficDensity: TrafficDensity;
+  onChangeMode?: (mode: GameMode) => void;
   onBack: () => void;
   onLaunchDrive: (
     route: RouteDefinition,
@@ -61,6 +63,7 @@ export function InteractiveMapScreen({
   initialTimeOfDay,
   initialWeather,
   initialTrafficDensity,
+  onChangeMode,
   onBack,
   onLaunchDrive,
 }: InteractiveMapScreenProps) {
@@ -72,6 +75,9 @@ export function InteractiveMapScreen({
   const [timeOfDay, setTimeOfDay] = useState<TimeOfDayId>(initialTimeOfDay);
   const [weather, setWeather] = useState<WeatherId>(initialWeather);
   const [trafficDensity, setTrafficDensity] = useState<TrafficDensity>(initialTrafficDensity);
+
+  const [rightTab, setRightTab] = useState<'route' | 'env' | 'gps'>('route');
+  const [gpsPage, setGpsPage] = useState(0);
 
   // Pan, zoom, & compass rotation state
   const [mapZoom, setMapZoom] = useState<number>(1);
@@ -138,6 +144,7 @@ export function InteractiveMapScreen({
   const handleStopClick = (stopId: string, unlockLevel: number) => {
     if (mode === 'career' && unlockLevel > careerLevel) return;
     setUseCustomTrip(true);
+    setGpsPage(0);
     if (originId === stopId) return;
     if (destId === stopId) {
       setDestId(originId);
@@ -152,79 +159,122 @@ export function InteractiveMapScreen({
   const viewBoxStr = `${pan.x - baseW / 2} ${pan.z - baseH / 2} ${baseW} ${baseH}`;
   const polylinePoints = routePlan.waypoints.map((p) => `${p.x},${p.z}`).join(' ');
 
+  const STEPS_PER_PAGE = 4;
+  const totalGpsPages = Math.max(1, Math.ceil(routePlan.steps.length / STEPS_PER_PAGE));
+  const safeGpsPage = Math.min(gpsPage, totalGpsPages - 1);
+  const visibleSteps = routePlan.steps.slice(
+    safeGpsPage * STEPS_PER_PAGE,
+    safeGpsPage * STEPS_PER_PAGE + STEPS_PER_PAGE
+  );
+
   const renderWeatherIcon = (wId: WeatherId) => {
-    if (wId === 'sunny') return <Sun className="w-4 h-4 text-amber-400" />;
-    if (wId === 'cloudy') return <Cloud className="w-4 h-4 text-sky-300" />;
-    if (wId === 'fog') return <CloudFog className="w-4 h-4 text-slate-300" />;
-    return <CloudRain className="w-4 h-4 text-blue-400" />;
+    if (wId === 'sunny') return <Sun className="w-3.5 h-3.5 text-amber-400" />;
+    if (wId === 'cloudy') return <Cloud className="w-3.5 h-3.5 text-sky-300" />;
+    if (wId === 'fog') return <CloudFog className="w-3.5 h-3.5 text-slate-300" />;
+    return <CloudRain className="w-3.5 h-3.5 text-blue-400" />;
   };
 
   return (
-    <div className="fixed inset-0 z-30 bg-neutral-950/96 text-white flex flex-col overflow-hidden select-none">
-      {/* Top Bar */}
-      <header className="flex flex-wrap items-center justify-between gap-2.5 px-4 py-3 border-b border-white/10 bg-neutral-900">
-        <div className="flex items-center gap-3 min-w-0">
+    <div className="fixed inset-0 h-[100dvh] z-30 bg-neutral-950/96 text-white flex flex-col overflow-hidden select-none">
+      {/* Compact Non-Scrolling Header */}
+      <header className="flex items-center justify-between gap-2 px-3 sm:px-4 py-2 border-b border-white/10 bg-neutral-900 shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
           <button
             onClick={onBack}
-            className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold transition-colors cursor-pointer shrink-0"
+            className="min-h-[38px] sm:min-h-[42px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold transition-colors cursor-pointer shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
             Menu
           </button>
           <div className="min-w-0">
-            <h1 className="text-sm sm:text-lg font-black tracking-tight flex items-center gap-2 truncate">
-              <Compass className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-400 shrink-0" />
+            <h1 className="text-xs sm:text-base font-black tracking-tight flex items-center gap-1.5 truncate">
+              <Compass className="w-4 h-4 text-emerald-400 shrink-0" />
               Tamil Nadu Map &amp; Route Planner
             </h1>
-            <p className="text-[11px] text-neutral-400 truncate">
+            <p className="hidden sm:block text-[11px] text-neutral-400 truncate">
               {mode === 'career'
-                ? `Career Mode (Lvl ${careerLevel}) — Drag map to pan, tap terminals to chart`
-                : 'Free Mode — All 23 Tamil Nadu hubs & 3 mountain ghats unlocked'}
+                ? `Career Mode (Lvl ${careerLevel}) · Drag map to pan, tap terminals to chart`
+                : 'Free Mode · All 23 Tamil Nadu hubs & 3 mountain ghats unlocked'}
             </p>
           </div>
         </div>
 
-        {/* Route Preset Tabs */}
-        <div className="flex items-center gap-1.5 overflow-x-auto max-w-full pb-1 sm:pb-0">
-          {ROUTES.map((r) => {
-            const locked = mode === 'career' && r.unlockLevel > careerLevel;
-            const isSelected = !useCustomTrip && selectedPresetId === r.id;
-            return (
+        {/* Mode Switcher + Preset vs Custom Selector (Zero Horizontal Scroll) */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {onChangeMode && (
+            <div className="flex items-center p-1 rounded-xl bg-neutral-950 border border-white/10">
               <button
-                key={r.id}
-                onClick={() => {
-                  setUseCustomTrip(false);
-                  setSelectedPresetId(r.id);
-                }}
-                className={`min-h-[38px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-                  isSelected
-                    ? 'bg-emerald-600 border-emerald-400 text-white shadow'
-                    : 'bg-white/5 hover:bg-white/10 border-white/10 text-neutral-300'
+                onClick={() => onChangeMode('career')}
+                className={`min-h-[32px] px-2 py-1 rounded-lg text-[11px] font-bold cursor-pointer whitespace-nowrap ${
+                  mode === 'career' ? 'bg-amber-500 text-neutral-950' : 'text-neutral-300 hover:bg-white/5'
                 }`}
               >
-                {locked && <Lock className="w-3 h-3 text-amber-400" />}
-                <span>{r.code}</span>
+                Career
               </button>
-            );
-          })}
-          <button
-            onClick={() => setUseCustomTrip(true)}
-            className={`min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              useCustomTrip
-                ? 'bg-amber-500 border-amber-300 text-neutral-950'
-                : 'bg-white/5 hover:bg-white/10 border-white/10 text-neutral-300'
-            }`}
-          >
-            Custom Map
-          </button>
+              <button
+                onClick={() => onChangeMode('free')}
+                className={`min-h-[32px] px-2 py-1 rounded-lg text-[11px] font-bold cursor-pointer whitespace-nowrap ${
+                  mode === 'free' ? 'bg-sky-500 text-neutral-950' : 'text-neutral-300 hover:bg-white/5'
+                }`}
+              >
+                Free
+              </button>
+            </div>
+          )}
+
+          <div className="flex items-center p-1 rounded-xl bg-neutral-950 border border-white/10">
+            <button
+              onClick={() => {
+                setUseCustomTrip(false);
+                setGpsPage(0);
+              }}
+              className={`min-h-[32px] px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer whitespace-nowrap ${
+                !useCustomTrip ? 'bg-emerald-600 text-white' : 'text-neutral-300 hover:bg-white/5'
+              }`}
+            >
+              Scheduled Line
+            </button>
+            <button
+              onClick={() => {
+                setUseCustomTrip(true);
+                setGpsPage(0);
+              }}
+              className={`min-h-[32px] px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer whitespace-nowrap ${
+                useCustomTrip ? 'bg-amber-500 text-neutral-950' : 'text-neutral-300 hover:bg-white/5'
+              }`}
+            >
+              Custom Map
+            </button>
+          </div>
+
+          {!useCustomTrip && (
+            <select
+              value={selectedPresetId}
+              onChange={(e) => {
+                setSelectedPresetId(e.target.value);
+                setGpsPage(0);
+              }}
+              className="min-h-[38px] max-w-[180px] sm:max-w-[260px] px-2.5 py-1 rounded-xl bg-neutral-950 border border-white/15 text-xs font-bold text-white"
+            >
+              {ROUTES.map((r) => {
+                const locked = mode === 'career' && r.unlockLevel > careerLevel;
+                return (
+                  <option key={r.id} value={r.id}>
+                    {locked ? '[Locked] ' : ''}
+                    {r.code} · {r.titleEn}
+                  </option>
+                );
+              })}
+            </select>
+          )}
         </div>
       </header>
 
-      {/* Main Split Content */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 min-h-0 overflow-y-auto lg:overflow-hidden">
+      {/* Main Horizontal Landscape Split — Never Stacks Vertically */}
+      <div className="flex-1 grid grid-cols-12 min-h-0 overflow-hidden">
         {/* Left: Interactive Pan/Zoom/Rotate Tamil Nadu Corridor Map */}
         <div
-          className="lg:col-span-7 xl:col-span-8 relative bg-neutral-950 flex flex-col min-h-[280px] sm:min-h-[360px] border-b lg:border-b-0 lg:border-r border-white/10 touch-none"
+          className="col-span-7 relative bg-neutral-950 flex flex-col min-h-0 border-r border-white/10 touch-none overflow-hidden"
           onPointerDown={(e) => {
             dragRef.current = { active: true, lastX: e.clientX, lastY: e.clientY };
           }}
@@ -248,37 +298,37 @@ export function InteractiveMapScreen({
           }}
         >
           {/* Map Legend & Zoom/Rotate Controls */}
-          <div className="absolute top-3 left-3 right-3 z-10 flex items-center justify-between gap-2 pointer-events-none">
-            <div className="hidden sm:flex px-3 py-1.5 rounded-xl bg-neutral-900/92 border border-white/10 text-[11px] text-neutral-300 items-center gap-3 pointer-events-auto">
+          <div className="absolute top-2.5 left-2.5 right-2.5 z-10 flex items-center justify-between gap-2 pointer-events-none">
+            <div className="hidden md:flex px-2.5 py-1 rounded-xl bg-neutral-900/92 border border-white/10 text-[11px] text-neutral-300 items-center gap-3 pointer-events-auto">
               <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" /> Route
+                <span className="w-2 h-2 rounded-full bg-emerald-400" /> Route
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-sm bg-amber-400" /> Hairpin Ghats
+                <span className="w-2 h-2 rounded-sm bg-amber-400" /> Ghats
               </span>
               <span className="inline-flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-sky-400" /> Coast
+                <span className="w-2 h-2 rounded-full bg-sky-400" /> Coast
               </span>
             </div>
 
-            <div className="flex items-center gap-1.5 pointer-events-auto ml-auto">
+            <div className="flex items-center gap-1 pointer-events-auto ml-auto">
               <button
                 onClick={() => setMapZoom((z) => Math.min(2.6, Number((z + 0.3).toFixed(2))))}
-                className="min-h-[40px] min-w-[40px] p-2 rounded-lg bg-neutral-900/92 hover:bg-neutral-800 border border-white/10 text-white flex items-center justify-center cursor-pointer"
+                className="min-h-[36px] min-w-[36px] p-1.5 rounded-lg bg-neutral-900/92 hover:bg-neutral-800 border border-white/10 text-white flex items-center justify-center cursor-pointer"
                 title="Zoom In"
               >
                 <ZoomIn className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setMapZoom((z) => Math.max(0.85, Number((z - 0.3).toFixed(2))))}
-                className="min-h-[40px] min-w-[40px] p-2 rounded-lg bg-neutral-900/92 hover:bg-neutral-800 border border-white/10 text-white flex items-center justify-center cursor-pointer"
+                className="min-h-[36px] min-w-[36px] p-1.5 rounded-lg bg-neutral-900/92 hover:bg-neutral-800 border border-white/10 text-white flex items-center justify-center cursor-pointer"
                 title="Zoom Out"
               >
                 <ZoomOut className="w-4 h-4" />
               </button>
               <button
                 onClick={() => setRotated((r) => !r)}
-                className={`min-h-[40px] min-w-[40px] p-2 rounded-lg border flex items-center justify-center cursor-pointer ${
+                className={`min-h-[36px] min-w-[36px] p-1.5 rounded-lg border flex items-center justify-center cursor-pointer ${
                   rotated
                     ? 'bg-sky-600 border-sky-400 text-white'
                     : 'bg-neutral-900/92 hover:bg-neutral-800 border-white/10 text-white'
@@ -293,7 +343,7 @@ export function InteractiveMapScreen({
                   setMapZoom(1);
                   setRotated(false);
                 }}
-                className="min-h-[40px] min-w-[40px] p-2 rounded-lg bg-neutral-900/92 hover:bg-neutral-800 border border-white/10 text-white flex items-center justify-center cursor-pointer"
+                className="min-h-[36px] min-w-[36px] p-1.5 rounded-lg bg-neutral-900/92 hover:bg-neutral-800 border border-white/10 text-white flex items-center justify-center cursor-pointer"
                 title="Reset Map View"
               >
                 <LocateFixed className="w-4 h-4" />
@@ -500,252 +550,309 @@ export function InteractiveMapScreen({
           </svg>
         </div>
 
-        {/* Right: Route Configuration, Stats & Directions */}
-        <div className="lg:col-span-5 xl:col-span-4 bg-neutral-900 flex flex-col min-h-0 lg:overflow-y-auto ets-scroll p-4 space-y-3.5">
-          {/* Origin / Via / Destination */}
-          <div className="p-4 rounded-2xl bg-neutral-950/75 border border-white/10 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                {useCustomTrip ? 'Custom Corridor Selection' : `Schedule ${effectiveRoute.code}`}
-              </span>
-              {(isRouteLocked || isCustomLocked) && (
-                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-300">
-                  <Lock className="w-3 h-3" /> Unlocks Lvl{' '}
-                  {useCustomTrip
-                    ? Math.max(originStop.unlockLevel, destStop.unlockLevel)
-                    : activePreset.unlockLevel}
-                </span>
-              )}
-            </div>
+        {/* Right: Tabbed Route Configuration + Pinned Launch Button (ZERO Scrolling) */}
+        <div className="col-span-5 bg-neutral-900 flex flex-col justify-between min-h-0 overflow-hidden p-2.5 sm:p-3.5 gap-2">
+          {/* Sub-Tab Selector */}
+          <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-neutral-950 border border-white/10 shrink-0">
+            {(
+              [
+                { id: 'route', label: 'Route & Stats' },
+                { id: 'env', label: 'Env & Traffic' },
+                { id: 'gps', label: `GPS (${routePlan.steps.length})` },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setRightTab(t.id)}
+                className={`min-h-[32px] px-2 py-1 rounded-lg text-[11px] sm:text-xs font-bold transition-colors cursor-pointer whitespace-nowrap truncate ${
+                  rightTab === t.id
+                    ? 'bg-emerald-600 text-white'
+                    : 'text-neutral-300 hover:bg-white/5'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-            {!useCustomTrip ? (
-              <div>
-                <h2 className="text-sm sm:text-base font-black text-white">{effectiveRoute.titleEn}</h2>
-                <p className="text-xs text-emerald-300 mt-0.5">{effectiveRoute.titleTa}</p>
-                <p className="text-xs text-neutral-400 mt-1.5 leading-relaxed">
-                  {effectiveRoute.description}
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-wider text-neutral-400 mb-1">
-                      Starting Location
-                    </label>
-                    <select
-                      value={originId}
-                      onChange={(e) => setOriginId(e.target.value)}
-                      className="w-full min-h-[40px] px-2.5 py-1.5 rounded-lg bg-neutral-900 border border-white/15 text-xs text-white"
-                    >
-                      {BUS_STOPS.map((s) => (
-                        <option
-                          key={s.id}
-                          value={s.id}
-                          disabled={mode === 'career' && s.unlockLevel > careerLevel}
-                        >
-                          {s.nameEn}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] uppercase tracking-wider text-neutral-400 mb-1">
-                      Destination
-                    </label>
-                    <select
-                      value={destId}
-                      onChange={(e) => setDestId(e.target.value)}
-                      className="w-full min-h-[40px] px-2.5 py-1.5 rounded-lg bg-neutral-900 border border-white/15 text-xs text-white"
-                    >
-                      {BUS_STOPS.map((s) => (
-                        <option
-                          key={s.id}
-                          value={s.id}
-                          disabled={mode === 'career' && s.unlockLevel > careerLevel}
-                        >
-                          {s.nameEn}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+          {/* Active Tab Content */}
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col justify-center">
+            {rightTab === 'route' && (
+              <div className="p-2.5 sm:p-3.5 rounded-2xl bg-neutral-950/75 border border-white/10 space-y-2 sm:space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-amber-400">
+                    {useCustomTrip ? 'Custom Corridor' : `Schedule ${effectiveRoute.code}`}
+                  </span>
+                  {(isRouteLocked || isCustomLocked) && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-300">
+                      <Lock className="w-3 h-3" /> Lvl{' '}
+                      {useCustomTrip
+                        ? Math.max(originStop.unlockLevel, destStop.unlockLevel)
+                        : activePreset.unlockLevel}
+                    </span>
+                  )}
                 </div>
-                <div>
-                  <label className="block text-[10px] uppercase tracking-wider text-neutral-400 mb-1">
-                    Via Intermediate Stop (Optional)
-                  </label>
-                  <select
-                    value={viaId}
-                    onChange={(e) => setViaId(e.target.value)}
-                    className="w-full min-h-[40px] px-2.5 py-1.5 rounded-lg bg-neutral-900 border border-white/15 text-xs text-white"
-                  >
-                    <option value="">Direct Shortest Highway Route</option>
-                    {BUS_STOPS.filter((s) => s.id !== originId && s.id !== destId).map((s) => (
-                      <option
-                        key={s.id}
-                        value={s.id}
-                        disabled={mode === 'career' && s.unlockLevel > careerLevel}
+
+                {!useCustomTrip ? (
+                  <div>
+                    <h2 className="text-xs sm:text-sm font-black text-white leading-tight truncate">
+                      {effectiveRoute.titleEn}
+                    </h2>
+                    <p className="text-[11px] text-emerald-300 mt-0.5 truncate">{effectiveRoute.titleTa}</p>
+                    <p className="hidden sm:block text-xs text-neutral-400 mt-1 line-clamp-2">
+                      {effectiveRoute.description}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div>
+                        <label className="block text-[9px] uppercase tracking-wider text-neutral-400 mb-0.5">
+                          Origin
+                        </label>
+                        <select
+                          value={originId}
+                          onChange={(e) => {
+                            setOriginId(e.target.value);
+                            setGpsPage(0);
+                          }}
+                          className="w-full min-h-[34px] px-2 py-1 rounded-lg bg-neutral-900 border border-white/15 text-[11px] text-white"
+                        >
+                          {BUS_STOPS.map((s) => (
+                            <option
+                              key={s.id}
+                              value={s.id}
+                              disabled={mode === 'career' && s.unlockLevel > careerLevel}
+                            >
+                              {s.nameEn}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[9px] uppercase tracking-wider text-neutral-400 mb-0.5">
+                          Destination
+                        </label>
+                        <select
+                          value={destId}
+                          onChange={(e) => {
+                            setDestId(e.target.value);
+                            setGpsPage(0);
+                          }}
+                          className="w-full min-h-[34px] px-2 py-1 rounded-lg bg-neutral-900 border border-white/15 text-[11px] text-white"
+                        >
+                          {BUS_STOPS.map((s) => (
+                            <option
+                              key={s.id}
+                              value={s.id}
+                              disabled={mode === 'career' && s.unlockLevel > careerLevel}
+                            >
+                              {s.nameEn}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[9px] uppercase tracking-wider text-neutral-400 mb-0.5">
+                        Via Stop (Optional)
+                      </label>
+                      <select
+                        value={viaId}
+                        onChange={(e) => {
+                          setViaId(e.target.value);
+                          setGpsPage(0);
+                        }}
+                        className="w-full min-h-[34px] px-2 py-1 rounded-lg bg-neutral-900 border border-white/15 text-[11px] text-white"
                       >
-                        Via {s.nameEn}
-                      </option>
-                    ))}
-                  </select>
+                        <option value="">Direct Shortest Highway Route</option>
+                        {BUS_STOPS.filter((s) => s.id !== originId && s.id !== destId).map((s) => (
+                          <option
+                            key={s.id}
+                            value={s.id}
+                            disabled={mode === 'career' && s.unlockLevel > careerLevel}
+                          >
+                            Via {s.nameEn}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {/* Trip Telemetry Preview */}
+                <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-white/10 text-center">
+                  <div className="p-1.5 rounded-xl bg-white/5">
+                    <div className="text-[9px] sm:text-[10px] text-neutral-400 flex items-center justify-center gap-1">
+                      <Navigation className="w-3 h-3 text-emerald-400" /> Dist
+                    </div>
+                    <div className="text-xs font-black font-mono tabular-nums mt-0.5">
+                      {(routePlan.totalDistanceMeters / 1000).toFixed(1)} km
+                    </div>
+                  </div>
+                  <div className="p-1.5 rounded-xl bg-white/5">
+                    <div className="text-[9px] sm:text-[10px] text-neutral-400 flex items-center justify-center gap-1">
+                      <Clock className="w-3 h-3 text-amber-400" /> ETA
+                    </div>
+                    <div className="text-xs font-black font-mono tabular-nums mt-0.5">
+                      {Math.floor(routePlan.estimatedSeconds / 60)}m {routePlan.estimatedSeconds % 60}s
+                    </div>
+                  </div>
+                  <div className="p-1.5 rounded-xl bg-white/5">
+                    <div className="text-[9px] sm:text-[10px] text-neutral-400 flex items-center justify-center gap-1">
+                      <Flag className="w-3 h-3 text-sky-400" /> Payout
+                    </div>
+                    <div className="text-xs font-black font-mono text-emerald-400 tabular-nums mt-0.5">
+                      {mode === 'career' ? `₹${effectiveRoute.baseReward}` : 'Free'}
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
 
-            {/* Trip Telemetry Preview */}
-            <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/10 text-center">
-              <div className="p-2 rounded-xl bg-white/5">
-                <div className="text-[10px] text-neutral-400 flex items-center justify-center gap-1">
-                  <Navigation className="w-3 h-3 text-emerald-400" /> Distance
-                </div>
-                <div className="text-xs sm:text-sm font-black font-mono tabular-nums mt-0.5">
-                  {(routePlan.totalDistanceMeters / 1000).toFixed(2)} km
-                </div>
-              </div>
-              <div className="p-2 rounded-xl bg-white/5">
-                <div className="text-[10px] text-neutral-400 flex items-center justify-center gap-1">
-                  <Clock className="w-3 h-3 text-amber-400" /> ETA
-                </div>
-                <div className="text-xs sm:text-sm font-black font-mono tabular-nums mt-0.5">
-                  {Math.floor(routePlan.estimatedSeconds / 60)}m {routePlan.estimatedSeconds % 60}s
-                </div>
-              </div>
-              <div className="p-2 rounded-xl bg-white/5">
-                <div className="text-[10px] text-neutral-400 flex items-center justify-center gap-1">
-                  <Flag className="w-3 h-3 text-sky-400" /> Payout
-                </div>
-                <div className="text-xs sm:text-sm font-black font-mono text-emerald-400 tabular-nums mt-0.5">
-                  {mode === 'career' ? `₹${effectiveRoute.baseReward}` : 'Free Roam'}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Environment: Time of Day & Weather */}
-          <div className="p-4 rounded-2xl bg-neutral-950/75 border border-white/10 space-y-3">
-            <div>
-              <div className="text-[11px] font-bold uppercase tracking-wider text-neutral-400 mb-1.5">
-                Departure Time
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {TIME_OF_DAY_PRESETS.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => setTimeOfDay(t.id)}
-                    className={`min-h-[40px] flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                      timeOfDay === t.id
-                        ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-                        : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
-                    }`}
-                  >
-                    {t.id === 'day' ? (
-                      <Sun className="w-3.5 h-3.5" />
-                    ) : t.id === 'sunset' ? (
-                      <Sunset className="w-3.5 h-3.5" />
-                    ) : (
-                      <Moon className="w-3.5 h-3.5" />
-                    )}
-                    <span className="capitalize">{t.id}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-[11px] font-bold uppercase tracking-wider text-neutral-400 mb-1.5">
-                Tamil Nadu Weather
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                {WEATHER_PRESETS.map((w) => (
-                  <button
-                    key={w.id}
-                    onClick={() => setWeather(w.id)}
-                    className={`min-h-[40px] flex items-center justify-center gap-1.5 py-2 px-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                      weather === w.id
-                        ? 'bg-sky-500/20 border-sky-400 text-white'
-                        : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
-                    }`}
-                  >
-                    {renderWeatherIcon(w.id)}
-                    <span>{w.name}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div className="text-[11px] font-bold uppercase tracking-wider text-neutral-400 mb-1.5">
-                Road Traffic Density
-              </div>
-              <div className="grid grid-cols-5 gap-1.5">
-                {([
-                  { id: 'off', label: 'Off' },
-                  { id: 'light', label: 'Light' },
-                  { id: 'normal', label: 'Normal' },
-                  { id: 'heavy', label: 'Heavy' },
-                  { id: 'rush', label: 'Rush' },
-                ] as { id: TrafficDensity; label: string }[]).map((td) => (
-                  <button
-                    key={td.id}
-                    onClick={() => setTrafficDensity(td.id)}
-                    className={`min-h-[40px] py-1.5 px-1 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                      trafficDensity === td.id
-                        ? 'bg-emerald-600 border-emerald-400 text-white'
-                        : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
-                    }`}
-                  >
-                    {td.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Turn-by-Turn GPS Steps Preview */}
-          <div className="p-4 rounded-2xl bg-neutral-950/75 border border-white/10 flex-1 min-h-[120px]">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-neutral-400">
-                GPS Turn-by-Turn Guidance
-              </span>
-              <span className="text-[11px] font-mono text-neutral-500">
-                {routePlan.steps.length} Steps
-              </span>
-            </div>
-            <div className="space-y-1.5 max-h-36 overflow-y-auto ets-scroll pr-1">
-              {routePlan.steps.map((step, i) => (
-                <div
-                  key={`${step.roadName}_${i}`}
-                  className="flex items-center justify-between gap-2 text-xs p-2 rounded-lg bg-white/5"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    {step.maneuver === 'left' ? (
-                      <CornerUpLeft className="w-4 h-4 text-emerald-400 shrink-0" />
-                    ) : step.maneuver === 'right' ? (
-                      <CornerUpRight className="w-4 h-4 text-amber-400 shrink-0" />
-                    ) : step.maneuver === 'uturn' ? (
-                      <RotateCcw className="w-4 h-4 text-sky-400 shrink-0" />
-                    ) : step.maneuver === 'arrive' ? (
-                      <MapPin className="w-4 h-4 text-emerald-400 shrink-0" />
-                    ) : (
-                      <ArrowUp className="w-4 h-4 text-neutral-300 shrink-0" />
-                    )}
-                    <span className="text-neutral-200 truncate">{step.instruction}</span>
+            {rightTab === 'env' && (
+              <div className="p-2.5 sm:p-3.5 rounded-2xl bg-neutral-950/75 border border-white/10 space-y-2 sm:space-y-2.5">
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-1">
+                    Departure Time
                   </div>
-                  <span className="text-[11px] font-mono text-neutral-400 shrink-0 tabular-nums">
-                    {step.distanceMeters}m
-                  </span>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {TIME_OF_DAY_PRESETS.map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => setTimeOfDay(t.id)}
+                        className={`min-h-[34px] flex items-center justify-center gap-1 py-1 px-1.5 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                          timeOfDay === t.id
+                            ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                            : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
+                        }`}
+                      >
+                        {t.id === 'day' ? (
+                          <Sun className="w-3.5 h-3.5" />
+                        ) : t.id === 'sunset' ? (
+                          <Sunset className="w-3.5 h-3.5" />
+                        ) : (
+                          <Moon className="w-3.5 h-3.5" />
+                        )}
+                        <span className="capitalize">{t.id}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              ))}
-            </div>
+
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-1">
+                    Tamil Nadu Weather
+                  </div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {WEATHER_PRESETS.map((w) => (
+                      <button
+                        key={w.id}
+                        onClick={() => setWeather(w.id)}
+                        className={`min-h-[34px] flex items-center justify-center gap-1 py-1 px-1 rounded-xl text-[10px] sm:text-[11px] font-bold border transition-all cursor-pointer ${
+                          weather === w.id
+                            ? 'bg-sky-500/20 border-sky-400 text-white'
+                            : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
+                        }`}
+                      >
+                        {renderWeatherIcon(w.id)}
+                        <span className="truncate">{w.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-1">
+                    Road Traffic Density
+                  </div>
+                  <div className="grid grid-cols-5 gap-1">
+                    {([
+                      { id: 'off', label: 'Off' },
+                      { id: 'light', label: 'Light' },
+                      { id: 'normal', label: 'Normal' },
+                      { id: 'heavy', label: 'Heavy' },
+                      { id: 'rush', label: 'Rush' },
+                    ] as { id: TrafficDensity; label: string }[]).map((td) => (
+                      <button
+                        key={td.id}
+                        onClick={() => setTrafficDensity(td.id)}
+                        className={`min-h-[34px] py-1 px-1 rounded-xl text-[10px] sm:text-[11px] font-bold border transition-all cursor-pointer ${
+                          trafficDensity === td.id
+                            ? 'bg-emerald-600 border-emerald-400 text-white'
+                            : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
+                        }`}
+                      >
+                        {td.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {rightTab === 'gps' && (
+              <div className="p-2.5 sm:p-3.5 rounded-2xl bg-neutral-950/75 border border-white/10 flex flex-col justify-between gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                    Turn-by-Turn Guidance
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      disabled={safeGpsPage === 0}
+                      onClick={() => setGpsPage((p) => Math.max(0, p - 1))}
+                      className="min-h-[28px] min-w-[28px] rounded-lg bg-white/10 hover:bg-white/20 disabled:opacity-35 flex items-center justify-center cursor-pointer"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-[10px] font-mono text-neutral-400 tabular-nums px-1">
+                      {safeGpsPage + 1}/{totalGpsPages}
+                    </span>
+                    <button
+                      disabled={safeGpsPage >= totalGpsPages - 1}
+                      onClick={() => setGpsPage((p) => Math.min(totalGpsPages - 1, p + 1))}
+                      className="min-h-[28px] min-w-[28px] rounded-lg bg-white/10 hover:bg-white/20 disabled:opacity-35 flex items-center justify-center cursor-pointer"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  {visibleSteps.map((step, i) => (
+                    <div
+                      key={`${step.roadName}_${safeGpsPage}_${i}`}
+                      className="flex items-center justify-between gap-2 text-[11px] px-2.5 py-1.5 rounded-lg bg-white/5"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {step.maneuver === 'left' ? (
+                          <CornerUpLeft className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        ) : step.maneuver === 'right' ? (
+                          <CornerUpRight className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        ) : step.maneuver === 'uturn' ? (
+                          <RotateCcw className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                        ) : step.maneuver === 'arrive' ? (
+                          <MapPin className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        ) : (
+                          <ArrowUp className="w-3.5 h-3.5 text-neutral-300 shrink-0" />
+                        )}
+                        <span className="text-neutral-200 truncate">{step.instruction}</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-neutral-400 shrink-0 tabular-nums">
+                        {step.distanceMeters}m
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Launch Drive Button */}
+          {/* Pinned Launch Drive Button */}
           <button
             disabled={isRouteLocked || isCustomLocked}
             onClick={() => onLaunchDrive(effectiveRoute, timeOfDay, weather, trafficDensity)}
-            className={`w-full min-h-[48px] py-3.5 px-5 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2.5 shadow-xl transition-all ${
+            className={`w-full min-h-[42px] sm:min-h-[48px] py-2.5 px-4 rounded-xl sm:rounded-2xl font-black text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 shadow-xl transition-all shrink-0 ${
               isRouteLocked || isCustomLocked
                 ? 'bg-neutral-800 text-neutral-500 border border-white/10 cursor-not-allowed'
                 : 'bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white border border-emerald-300/40 cursor-pointer'
@@ -758,16 +865,11 @@ export function InteractiveMapScreen({
               </>
             ) : (
               <>
-                <Play className="w-5 h-5 fill-current" />
+                <Play className="w-4 h-4 fill-current" />
                 Start Engine &amp; Drive Route
               </>
             )}
           </button>
-
-          <div className="flex items-center justify-center gap-2 text-[11px] text-neutral-500 pb-1">
-            <Fuel className="w-3.5 h-3.5 text-amber-400" />
-            <span>FASTag Tolls &amp; Diesel Refuel Bunks active along highways</span>
-          </div>
         </div>
       </div>
     </div>

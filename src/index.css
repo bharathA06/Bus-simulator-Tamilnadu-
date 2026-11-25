@@ -7,7 +7,13 @@
     -webkit-user-select: none;
   }
   html,
-  body {
+  body,
+  #root {
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    padding: 0;
     overflow: hidden;
     overscroll-behavior: none;
     touch-action: none;
@@ -42,21 +48,6 @@
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 
-/* Custom sleek dark scrollbar for Route Planner, Garage, Shop & Settings panels */
-.ets-scroll::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-.ets-scroll::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.4);
-}
-.ets-scroll::-webkit-scrollbar-thumb {
-  background: rgba(100, 116, 139, 0.5);
-  border-radius: 3px;
-}
-.ets-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(16, 185, 129, 0.6);
-}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

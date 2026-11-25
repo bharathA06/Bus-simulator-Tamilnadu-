@@ -78,6 +78,7 @@ export class CanvasEngine {
   private routeTimeLeft = 210;
   private routeCompleted = false;
   private missionFailed = false;
+  private freeRoamFinalStopCompleted = false;
   private boardingTimer = 0;
   private isBoardingActive = false;
 
@@ -198,8 +199,9 @@ export class CanvasEngine {
     if (paused) {
       this.keysHeld = {};
       this.mobileInputsActive = false;
-      this.physics.setInputs(0, 0, false, this.physics.state.isReverse, false);
+      this.physics.setInputs(0, 0, false, undefined, false);
       busAudio.stopHorn();
+      busAudio.cancelSpeech();
     }
   }
 
@@ -209,10 +211,12 @@ export class CanvasEngine {
 
   public setShowcaseOrbit(_active: boolean) {}
 
-  public applySettings(settings: GameSettings) {
+  public applySettings(settings: GameSettings, applyDefaultCamera: boolean = false) {
     this.speedUnit = settings.speedUnit;
     this.controlScheme = settings.controlScheme;
-    this.cameraMode = settings.defaultCamera;
+    if (applyDefaultCamera) {
+      this.cameraMode = settings.defaultCamera;
+    }
     this.physics.setSteeringSensitivity(settings.steeringSensitivity);
     this.physics.setAutoReverse(settings.autoReverse);
     this.physics.setManualGearbox(!!settings.manualGearbox);
@@ -372,9 +376,12 @@ export class CanvasEngine {
 
   private handleResize = () => {
     if (!this.mount || !this.canvas) return;
+    const w = this.mount.clientWidth;
+    const h = this.mount.clientHeight;
+    if (w <= 0 || h <= 0) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.canvas.width = this.mount.clientWidth * dpr;
-    this.canvas.height = this.mount.clientHeight * dpr;
+    this.canvas.width = w * dpr;
+    this.canvas.height = h * dpr;
   };
 
   private triggerRuleAlert(text: string, amount: number, isFine: boolean) {
@@ -414,15 +421,26 @@ export class CanvasEngine {
   }
 
   public toggleDoors() {
+    if (Math.abs(this.physics.state.speedKmh) >= 3) {
+      this.triggerRuleAlert('STOP BUS (< 3 KM/H) TO OPERATE DOORS', 0, false);
+      return;
+    }
     const success = this.physics.toggleDoor();
     if (success && this.physics.state.doorOpen && this.isBusAtActiveStop() && !this.isBoardingActive) {
-      this.startBoardingSequence();
+      if (
+        this.gameMode === 'free' &&
+        this.currentStopIndex >= this.activeRoute.stops.length - 1 &&
+        this.freeRoamFinalStopCompleted
+      ) {
+        this.triggerRuleAlert('DESTINATION ALREADY SERVED — DRIVE FREELY', 0, false);
+      } else {
+        this.startBoardingSequence();
+      }
     }
   }
 
   public toggleReverse() {
-    this.physics.state.isReverse = !this.physics.state.isReverse;
-    busAudio.playAirBrakeHiss();
+    this.physics.toggleReverse();
   }
 
   public toggleParkingBrake() {
@@ -467,7 +485,10 @@ export class CanvasEngine {
 
   public restAtStop() {
     const nearRest = this.nearFacilityPrompt?.type === 'rest_stop';
-    if (!nearRest && this.physics.state.fatiguePct < 45) return;
+    if (!nearRest && this.physics.state.fatiguePct < 45) {
+      this.triggerRuleAlert('STOP AT REST AREA OR WAIT FOR FATIGUE (> 45%)', 0, false);
+      return;
+    }
     const cost = TRAFFIC_RULES.teaBreakCost;
     this.fuelSpentTrip += cost;
     this.physics.restBreak();
@@ -475,7 +496,10 @@ export class CanvasEngine {
   }
 
   public repairBusRoadside() {
-    if (this.physics.state.healthPct >= 95) return;
+    if (this.physics.state.healthPct >= 95) {
+      this.triggerRuleAlert('COACH CONDITION ALREADY OPTIMAL', 0, false);
+      return;
+    }
     const cost = TRAFFIC_RULES.repairCost;
     this.fuelSpentTrip += cost;
     this.physics.repairBus();
@@ -483,7 +507,10 @@ export class CanvasEngine {
   }
 
   public washBusRoadside() {
-    if (this.physics.state.dirtinessPct <= 5) return;
+    if (this.physics.state.dirtinessPct <= 5) {
+      this.triggerRuleAlert('COACH BODYWORK ALREADY CLEAN', 0, false);
+      return;
+    }
     const cost = TRAFFIC_RULES.washCost;
     this.fuelSpentTrip += cost;
     this.physics.washBus();
@@ -532,8 +559,14 @@ export class CanvasEngine {
 
   public refuelBus() {
     const isNearPetrol = this.nearFacilityPrompt?.type === 'petrol';
-    if (!isNearPetrol && this.physics.state.fuelPct > 25) return;
-    if (this.physics.state.fuelPct >= 98) return;
+    if (this.physics.state.fuelPct >= 98) {
+      this.triggerRuleAlert('DIESEL TANK ALREADY FULL', 0, false);
+      return;
+    }
+    if (!isNearPetrol && this.physics.state.fuelPct > 25) {
+      this.triggerRuleAlert('VISIT PETROL BUNK TO REFUEL ABOVE 25%', 0, false);
+      return;
+    }
     const cost = isNearPetrol ? 120 : 180;
     this.physics.refuel(100);
     this.fuelSpentTrip += cost;
@@ -563,6 +596,14 @@ export class CanvasEngine {
     const target = this.physics.toggleCruiseControl();
     if (target !== null) {
       this.triggerRuleAlert(`CRUISE SET: ${target} KM/H`, 0, false);
+    } else if (this.physics.state.cruiseControlSpeed === null) {
+      this.triggerRuleAlert(
+        this.physics.state.speedKmh < 15
+          ? 'REACH 15+ KM/H FORWARD TO SET CRUISE'
+          : 'CRUISE CONTROL OFF',
+        0,
+        false
+      );
     }
   }
 
@@ -649,15 +690,27 @@ export class CanvasEngine {
     this.tollsPaidTrip = 0;
     this.lastTollPaidId = '';
     this.lastPoliceCheckId = '';
+    this.nearFacilityPrompt = null;
+    this.wrongWayCooldown = 0;
+    this.speedFineCooldown = 0;
+    this.ruleAlertTimer = 0;
+    this.announcementTimer = 0;
+    this.ignitionReminderCooldown = 0;
     this.replayFrames = [];
     this.replayRecordTimer = 0;
     this.isReplaying = false;
+    this.replayPaused = false;
+    this.replayCursor = 0;
+    this.replayElapsed = 0;
+    this.keysHeld = {};
+    this.mobileInputsActive = false;
     this.satisfaction = 100;
     this.distanceTraveledMeters = 0;
     this.collisionCountTrip = 0;
     this.routeTimeLeft = route.targetSeconds;
     this.routeCompleted = false;
     this.missionFailed = false;
+    this.freeRoamFinalStopCompleted = false;
     this.ruleAlert = null;
     this.announcementText = null;
     this.isBoardingActive = false;
@@ -672,14 +725,16 @@ export class CanvasEngine {
     throttle: number,
     steer: number,
     brake: boolean | number,
-    reverse: boolean,
+    _reverse: boolean,
     clutch: boolean = false,
     handbrake?: boolean
   ) {
     const brakeActive = typeof brake === 'number' ? brake > 0.02 : brake;
     this.mobileInputsActive = throttle !== 0 || steer !== 0 || brakeActive || clutch || !!handbrake;
-    this.physics.setInputs(throttle, steer, brake, reverse, clutch, handbrake);
-    busAudio.startEngine();
+    this.physics.setInputs(throttle, steer, brake, undefined, clutch, handbrake);
+    if (this.physics.state.engineRunning) {
+      busAudio.startEngine();
+    }
     busAudio.startAmbientMusic();
   }
 
@@ -733,6 +788,7 @@ export class CanvasEngine {
         });
       }
     } else {
+      this.freeRoamFinalStopCompleted = true;
       this.triggerRuleAlert('FREE ROAM DESTINATION REACHED!', 50, false);
     }
   }
@@ -789,7 +845,7 @@ export class CanvasEngine {
       passengerGroup: activeStop.passengerGroup,
       nextStopDistanceMeters: Math.round(dist),
       isAtStop: this.isBusAtActiveStop(),
-      canOpenDoors: this.isBusAtActiveStop() && Math.abs(s.speedKmh) < 2,
+      canOpenDoors: this.isBusAtActiveStop() && Math.abs(s.speedKmh) <= 3,
       doorsOpen: s.doorOpen,
       parkingBrake: s.parkingBrake,
       clutchPressed: s.clutchPressed,
@@ -1073,7 +1129,7 @@ export class CanvasEngine {
     ctx.scale(scale, scale);
 
     if (this.cameraMode !== 6) {
-      ctx.rotate(s.heading + this.cameraYawOffset * 0.45);
+      ctx.rotate(s.heading - Math.PI + this.cameraYawOffset * 0.45);
     }
     ctx.translate(-s.x, -s.z);
 

@@ -12,6 +12,7 @@ class BusAudioEngine {
   private masterVolume: number = 0.8;
   private musicVolume: number = 0.45;
   private isMuted: boolean = false;
+  private isStandbyPaused: boolean = false;
 
   // Multi-harmonic 6-cyl turbo diesel engine nodes
   private engineGain: GainNode | null = null;
@@ -90,16 +91,26 @@ class BusAudioEngine {
     }
   }
 
-  public setMuted(muted: boolean) {
-    this.isMuted = muted;
+  private get effectiveMuted(): boolean {
+    return this.isMuted || this.isStandbyPaused;
+  }
+
+  private syncEffectiveMuteState() {
+    const silenced = this.effectiveMuted;
     if (this.masterGain && this.ctx) {
-      this.masterGain.gain.setValueAtTime(muted ? 0 : this.masterVolume, this.ctx.currentTime);
+      this.masterGain.gain.setValueAtTime(silenced ? 0 : this.masterVolume, this.ctx.currentTime);
     }
-    if (this.engineGain && this.ctx) {
-      this.engineGain.gain.setValueAtTime(muted ? 0 : 0.15, this.ctx.currentTime);
+    if (this.musicGain && this.ctx) {
+      this.musicGain.gain.setValueAtTime(
+        silenced || this.radioStationId === 0 ? 0 : this.musicVolume * 0.16,
+        this.ctx.currentTime
+      );
+    }
+    if (this.engineGain && this.ctx && silenced) {
+      this.engineGain.gain.setValueAtTime(0, this.ctx.currentTime);
     }
     if (this.rainGain && this.ctx) {
-      const targetGain = muted
+      const targetGain = silenced
         ? 0
         : this.currentWeather === 'rain'
         ? 0.15
@@ -108,20 +119,41 @@ class BusAudioEngine {
         : 0;
       this.rainGain.gain.setValueAtTime(targetGain, this.ctx.currentTime);
     }
-    if (muted) {
+    if (silenced) {
       this.stopHorn();
+      this.cancelSpeech();
     }
+  }
+
+  public setMuted(muted: boolean) {
+    this.isMuted = muted;
+    this.syncEffectiveMuteState();
+  }
+
+  public setStandbyPaused(paused: boolean) {
+    this.isStandbyPaused = paused;
+    this.syncEffectiveMuteState();
   }
 
   public getMuted(): boolean {
     return this.isMuted;
   }
 
+  public cancelSpeech() {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // Ignore speech synthesis errors
+      }
+    }
+  }
+
   public setRadioStation(stationId: number) {
     this.radioStationId = stationId;
     if (this.musicGain && this.ctx) {
       this.musicGain.gain.setTargetAtTime(
-        this.isMuted || stationId === 0 ? 0 : this.musicVolume * 0.18,
+        this.isMuted || stationId === 0 ? 0 : this.musicVolume * 0.16,
         this.ctx.currentTime,
         0.06
       );
@@ -142,7 +174,7 @@ class BusAudioEngine {
     };
     const pattern = [0, 2, 4, 3, 1, 2, 5, 3];
     this.musicIntervalId = window.setInterval(() => {
-      if (!this.ctx || !this.musicGain || this.isMuted || this.musicVolume <= 0.02 || this.radioStationId === 0) return;
+      if (!this.ctx || !this.musicGain || this.effectiveMuted || this.musicVolume <= 0.02 || this.radioStationId === 0) return;
       if (this.ctx.state !== 'running') return;
       const now = this.ctx.currentTime;
       const scale = stationScales[this.radioStationId] || stationScales[1];

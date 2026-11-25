@@ -3,6 +3,8 @@ import {
   ArrowLeft,
   Bus,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Disc,
   Lock,
   Palette,
@@ -45,7 +47,10 @@ export function GarageScreen({
   onWashBus,
   onOpenShop,
 }: GarageScreenProps) {
-  const [rightTab, setRightTab] = useState<'customize' | 'upgrades'>('customize');
+  const [rightTab, setRightTab] = useState<'paint' | 'interior' | 'upgrades'>('paint');
+  const [fleetPage, setFleetPage] = useState(0);
+  const [partsPage, setPartsPage] = useState(0);
+
   const selectedLivery =
     BUS_LIVERIES.find((b) => b.id === progress.selectedBusId) || BUS_LIVERIES[0];
   const selectedSpec =
@@ -59,52 +64,90 @@ export function GarageScreen({
     });
   };
 
+  const FLEET_PER_PAGE = 4;
+  const totalFleetPages = Math.max(1, Math.ceil(BUS_LIVERIES.length / FLEET_PER_PAGE));
+  const safeFleetPage = Math.min(fleetPage, totalFleetPages - 1);
+  const visibleFleet = BUS_LIVERIES.slice(
+    safeFleetPage * FLEET_PER_PAGE,
+    safeFleetPage * FLEET_PER_PAGE + FLEET_PER_PAGE
+  );
+
+  const PARTS_PER_PAGE = 2;
+  const totalPartsPages = Math.max(1, Math.ceil(UPGRADE_CATALOG.length / PARTS_PER_PAGE));
+  const safePartsPage = Math.min(partsPage, totalPartsPages - 1);
+  const visibleParts = UPGRADE_CATALOG.slice(
+    safePartsPage * PARTS_PER_PAGE,
+    safePartsPage * PARTS_PER_PAGE + PARTS_PER_PAGE
+  );
+
   return (
-    <div className="fixed inset-0 z-20 flex flex-col justify-between p-4 sm:p-6 pointer-events-none select-none">
+    <div className="fixed inset-0 h-[100dvh] z-20 flex flex-col justify-between p-2.5 sm:p-4 overflow-hidden pointer-events-none select-none">
       {/* Top Bar */}
-      <header className="flex flex-wrap items-center justify-between gap-3 pointer-events-auto bg-neutral-900/90 backdrop-blur-md border border-white/10 rounded-2xl px-4 py-3 shadow-xl">
-        <div className="flex items-center gap-3">
+      <header className="flex items-center justify-between gap-2 pointer-events-auto bg-neutral-900/92 border border-white/10 rounded-xl sm:rounded-2xl px-3 py-2 shadow-xl shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
           <button
             onClick={onBack}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white transition-colors cursor-pointer"
+            className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white transition-colors cursor-pointer shrink-0"
           >
             <ArrowLeft className="w-4 h-4" />
-            Main Menu
+            Menu
           </button>
-          <div>
-            <h1 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
-              <Wrench className="w-4 h-4 text-sky-400" />
-              Depot Garage &amp; Coach Customization
+          <div className="min-w-0">
+            <h1 className="text-xs sm:text-base font-black text-white flex items-center gap-1.5 truncate">
+              <Wrench className="w-4 h-4 text-sky-400 shrink-0" />
+              Depot Garage &amp; Customization
             </h1>
-            <p className="text-[11px] text-neutral-400">
-              Select active Tamil Nadu bus, customize paint, number plate, interior, wheels &amp; tuning
+            <p className="hidden sm:block text-[11px] text-neutral-400 truncate">
+              {selectedLivery.name} · {selectedSpec.chassisModel} · {selectedSpec.engineHp} HP · {selectedSpec.topSpeedKmh} km/h
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
-          <div className="px-3.5 py-2 rounded-xl bg-neutral-950 border border-emerald-500/30 text-xs font-mono font-bold text-emerald-400 tabular-nums">
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="px-3 py-1.5 rounded-xl bg-neutral-950 border border-emerald-500/30 text-xs font-mono font-bold text-emerald-400 tabular-nums">
             ₹{progress.money.toLocaleString('en-IN')}
           </div>
           <button
             onClick={onOpenShop}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-black transition-colors cursor-pointer"
+            className="min-h-[38px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-black transition-colors cursor-pointer whitespace-nowrap"
           >
             <ShoppingBag className="w-4 h-4" />
-            Visit Dealership
+            Shop
           </button>
         </div>
       </header>
 
-      {/* Center Open for Live 3D Rotating Bus Showcase */}
-      <div className="flex-1 flex flex-col lg:flex-row items-stretch justify-between gap-4 my-4 min-h-0">
-        {/* Left Sidebar: Owned & Locked Fleet */}
-        <aside className="w-full lg:w-72 bg-neutral-900/90 backdrop-blur-md border border-white/10 rounded-2xl p-3.5 pointer-events-auto flex flex-col max-h-[34vh] lg:max-h-full overflow-hidden shadow-xl">
-          <div className="text-xs font-bold uppercase tracking-wider text-neutral-400 px-1 mb-2.5">
-            Fleet Bays ({progress.ownedBusIds.length}/{BUS_LIVERIES.length} Owned)
+      {/* Horizontal Split with Open Center for Live 3D Bus */}
+      <div className="flex-1 flex flex-row items-stretch justify-between gap-3 my-2 min-h-0 overflow-hidden">
+        {/* Left Sidebar: Paginated Fleet Bays */}
+        <aside className="w-52 sm:w-64 bg-neutral-900/92 border border-white/10 rounded-2xl p-2.5 sm:p-3 pointer-events-auto flex flex-col justify-between overflow-hidden shadow-xl shrink-0">
+          <div className="flex items-center justify-between gap-1 px-1 mb-1.5 shrink-0">
+            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-neutral-400 truncate">
+              Fleet ({progress.ownedBusIds.length}/{BUS_LIVERIES.length})
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                disabled={safeFleetPage === 0}
+                onClick={() => setFleetPage((p) => Math.max(0, p - 1))}
+                className="min-h-[26px] min-w-[26px] rounded bg-white/10 hover:bg-white/20 disabled:opacity-35 flex items-center justify-center cursor-pointer"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <span className="text-[10px] font-mono text-neutral-400 tabular-nums">
+                {safeFleetPage + 1}/{totalFleetPages}
+              </span>
+              <button
+                disabled={safeFleetPage >= totalFleetPages - 1}
+                onClick={() => setFleetPage((p) => Math.min(totalFleetPages - 1, p + 1))}
+                className="min-h-[26px] min-w-[26px] rounded bg-white/10 hover:bg-white/20 disabled:opacity-35 flex items-center justify-center cursor-pointer"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-          <div className="space-y-2 overflow-y-auto pr-1 flex-1">
-            {BUS_LIVERIES.map((bus) => {
+
+          <div className="space-y-1.5 flex-1 min-h-0 flex flex-col justify-center">
+            {visibleFleet.map((bus) => {
               const owned = progress.ownedBusIds.includes(bus.id);
               const active = progress.selectedBusId === bus.id;
               return (
@@ -112,7 +155,7 @@ export function GarageScreen({
                   key={bus.id}
                   disabled={!owned}
                   onClick={() => owned && onSelectBus(bus.id)}
-                  className={`w-full p-2.5 rounded-xl border text-left transition-all flex items-center gap-3 ${
+                  className={`w-full p-2 rounded-xl border text-left transition-all flex items-center gap-2 ${
                     active
                       ? 'bg-emerald-600/25 border-emerald-400 text-white'
                       : owned
@@ -121,147 +164,88 @@ export function GarageScreen({
                   }`}
                 >
                   <div
-                    className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border border-white/20"
+                    className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center shrink-0 border border-white/20"
                     style={{ backgroundColor: bus.primaryColor }}
                   >
-                    {owned ? <Bus className="w-4 h-4 text-white" /> : <Lock className="w-4 h-4 text-white/70" />}
+                    {owned ? <Bus className="w-3.5 h-3.5 text-white" /> : <Lock className="w-3.5 h-3.5 text-white/70" />}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-xs font-bold truncate">{bus.name}</div>
-                    <div className="text-[10px] text-neutral-400 truncate">{bus.busClass}</div>
+                    <div className="text-[11px] sm:text-xs font-bold truncate">{bus.name}</div>
+                    <div className="text-[9px] sm:text-[10px] text-neutral-400 truncate">{bus.busClass}</div>
                   </div>
-                  {active && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
+                  {active && <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
                 </button>
               );
             })}
           </div>
         </aside>
 
-        {/* Right Sidebar: Live Customization & Upgrades */}
-        <aside className="w-full lg:w-88 bg-neutral-900/90 backdrop-blur-md border border-white/10 rounded-2xl p-4 pointer-events-auto flex flex-col max-h-[45vh] lg:max-h-full overflow-hidden shadow-xl">
-          {/* Active Coach Stats */}
-          <div className="pb-3 border-b border-white/10">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-black text-white">{selectedLivery.name}</span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-400 text-neutral-950 font-black">
+        {/* Right Sidebar: Tabbed Live Customization & Upgrades (ZERO Scrolling) */}
+        <aside className="w-68 sm:w-84 bg-neutral-900/92 border border-white/10 rounded-2xl p-2.5 sm:p-3.5 pointer-events-auto flex flex-col justify-between overflow-hidden shadow-xl shrink-0">
+          {/* Active Coach Compact Summary */}
+          <div className="pb-2 border-b border-white/10 shrink-0">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs sm:text-sm font-black text-white truncate">{selectedLivery.name}</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-400 text-neutral-950 font-black shrink-0">
                 {currentCustom.registrationNumber}
               </span>
             </div>
-            <div className="text-[11px] text-neutral-400 mt-0.5">
-              {selectedSpec.chassisModel} · {(selectedSpec.weightKg / 1000).toFixed(1)}T · {selectedSpec.lengthMeters}m
-            </div>
-            <div className="grid grid-cols-3 gap-2 mt-2.5 text-[11px]">
-              <div className="bg-white/5 rounded-lg p-1.5 text-center">
-                <span className="text-neutral-400 block text-[10px]">Engine</span>
-                <span className="font-mono font-bold text-white">{selectedSpec.engineHp} HP</span>
+            <div className="grid grid-cols-3 gap-1.5 mt-1.5 text-[10px] font-mono tabular-nums text-center">
+              <div className="bg-white/5 rounded-lg py-1">
+                <span className="text-neutral-400">HP </span>
+                <span className="font-bold text-white">{selectedSpec.engineHp}</span>
               </div>
-              <div className="bg-white/5 rounded-lg p-1.5 text-center">
-                <span className="text-neutral-400 block text-[10px]">Top Speed</span>
-                <span className="font-mono font-bold text-emerald-400">
-                  {selectedSpec.topSpeedKmh} km/h
-                </span>
+              <div className="bg-white/5 rounded-lg py-1">
+                <span className="text-neutral-400">Max </span>
+                <span className="font-bold text-emerald-400">{selectedSpec.topSpeedKmh}</span>
               </div>
-              <div className="bg-white/5 rounded-lg p-1.5 text-center">
-                <span className="text-neutral-400 block text-[10px]">Seats</span>
-                <span className="font-mono font-bold text-amber-300">{selectedSpec.seats}</span>
-              </div>
-            </div>
-
-            {/* Coach Condition & Depot Wash / Repair */}
-            <div className="mt-2.5 p-2.5 rounded-xl bg-neutral-950/90 border border-white/10 space-y-2">
-              <div className="grid grid-cols-2 gap-2 text-[10px]">
-                <div>
-                  <div className="flex justify-between text-neutral-400 mb-1">
-                    <span>Coach Health</span>
-                    <span
-                      className={`font-mono font-bold tabular-nums ${
-                        progress.vehicleHealthPct < 45 ? 'text-red-400' : 'text-emerald-400'
-                      }`}
-                    >
-                      {Math.round(progress.vehicleHealthPct)}%
-                    </span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
-                    <div
-                      className={`h-full ${progress.vehicleHealthPct < 45 ? 'bg-red-500' : 'bg-emerald-400'}`}
-                      style={{ width: `${Math.max(0, Math.min(100, progress.vehicleHealthPct))}%` }}
-                    />
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-neutral-400 mb-1">
-                    <span>Body Mud/Dust</span>
-                    <span
-                      className={`font-mono font-bold tabular-nums ${
-                        progress.dirtinessPct > 55 ? 'text-amber-400' : 'text-sky-300'
-                      }`}
-                    >
-                      {Math.round(progress.dirtinessPct)}%
-                    </span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
-                    <div
-                      className="h-full bg-amber-500"
-                      style={{ width: `${Math.max(0, Math.min(100, progress.dirtinessPct))}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-1.5">
-                <button
-                  disabled={progress.vehicleHealthPct >= 99 || progress.money < 150}
-                  onClick={onRepairBus}
-                  className="py-1.5 px-2 rounded-lg text-[10px] font-bold bg-emerald-600/25 hover:bg-emerald-600/40 border border-emerald-400/40 text-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  Repair (-₹150)
-                </button>
-                <button
-                  disabled={progress.dirtinessPct <= 2 || progress.money < 80}
-                  onClick={onWashBus}
-                  className="py-1.5 px-2 rounded-lg text-[10px] font-bold bg-sky-600/25 hover:bg-sky-600/40 border border-sky-400/40 text-sky-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  Bus Wash (-₹80)
-                </button>
+              <div className="bg-white/5 rounded-lg py-1">
+                <span className="text-neutral-400">Seats </span>
+                <span className="font-bold text-amber-300">{selectedSpec.seats}</span>
               </div>
             </div>
           </div>
 
-          {/* Right Panel Tabs */}
-          <div className="grid grid-cols-2 gap-1.5 my-3">
+          {/* 3 Compact Sub-Tabs */}
+          <div className="grid grid-cols-3 gap-1 my-2 p-1 rounded-xl bg-neutral-950 border border-white/10 shrink-0">
             <button
-              onClick={() => setRightTab('customize')}
-              className={`py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
-                rightTab === 'customize'
-                  ? 'bg-sky-500 text-white'
-                  : 'bg-white/5 text-neutral-300 hover:bg-white/10'
+              onClick={() => setRightTab('paint')}
+              className={`min-h-[30px] rounded-lg text-[10px] sm:text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+                rightTab === 'paint' ? 'bg-sky-500 text-white' : 'text-neutral-300 hover:bg-white/5'
               }`}
             >
-              <Palette className="w-3.5 h-3.5" />
-              Paint &amp; Interior
+              <Palette className="w-3 h-3" />
+              Paint
+            </button>
+            <button
+              onClick={() => setRightTab('interior')}
+              className={`min-h-[30px] rounded-lg text-[10px] sm:text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+                rightTab === 'interior' ? 'bg-amber-500 text-neutral-950' : 'text-neutral-300 hover:bg-white/5'
+              }`}
+            >
+              <Disc className="w-3 h-3" />
+              Cabin/Care
             </button>
             <button
               onClick={() => setRightTab('upgrades')}
-              className={`py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
-                rightTab === 'upgrades'
-                  ? 'bg-emerald-600 text-white'
-                  : 'bg-white/5 text-neutral-300 hover:bg-white/10'
+              className={`min-h-[30px] rounded-lg text-[10px] sm:text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer transition-colors ${
+                rightTab === 'upgrades' ? 'bg-emerald-600 text-white' : 'text-neutral-300 hover:bg-white/5'
               }`}
             >
-              <Sparkles className="w-3.5 h-3.5" />
+              <Sparkles className="w-3 h-3" />
               Parts ({progress.equippedUpgrades.length})
             </button>
           </div>
 
-          {/* Tab Content */}
-          <div className="overflow-y-auto pr-1 flex-1 space-y-4">
-            {rightTab === 'customize' ? (
-              <>
-                {/* Body Color Palette */}
+          {/* Tab Body (Zero Scroll) */}
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col justify-center">
+            {rightTab === 'paint' && (
+              <div className="space-y-2.5">
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-400 mb-2">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-1.5">
                     Coach Paint &amp; Stripe Livery
                   </label>
-                  <div className="grid grid-cols-4 gap-2">
+                  <div className="grid grid-cols-4 gap-1.5">
                     {PAINT_PALETTE.map((p) => {
                       const active = currentCustom.bodyColorHex === p.bodyHex;
                       return (
@@ -274,21 +258,20 @@ export function GarageScreen({
                               stripeColorHex: p.stripeHex,
                             })
                           }
-                          className={`h-9 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-transform ${
+                          className={`h-8 rounded-lg border-2 flex items-center justify-center cursor-pointer transition-transform ${
                             active ? 'border-white scale-105' : 'border-white/20 hover:scale-105'
                           }`}
                           style={{ backgroundColor: p.hex }}
                         >
-                          {active && <Check className="w-4 h-4 text-white drop-shadow" />}
+                          {active && <Check className="w-3.5 h-3.5 text-white drop-shadow" />}
                         </button>
                       );
                     })}
                   </div>
                 </div>
 
-                {/* Registration Plate Input */}
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-400 mb-1.5">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-1">
                     Tamil Nadu Registration Plate
                   </label>
                   <input
@@ -298,47 +281,14 @@ export function GarageScreen({
                     onChange={(e) =>
                       patchCustom({ registrationNumber: e.target.value.toUpperCase() })
                     }
-                    className="w-full px-3 py-2 rounded-xl bg-amber-400/15 border border-amber-400/40 text-amber-200 font-mono font-bold text-xs tracking-wider focus:outline-none focus:border-amber-300"
+                    className="w-full min-h-[34px] px-2.5 py-1 rounded-xl bg-amber-400/15 border border-amber-400/40 text-amber-200 font-mono font-bold text-xs tracking-wider focus:outline-none focus:border-amber-300"
                     placeholder="TN 38 N 1402"
                   />
                 </div>
 
-                {/* Seat Upholstery */}
                 <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-400 mb-1.5">
-                    Cabin Interior &amp; Seats
-                  </label>
-                  <div className="space-y-1.5">
-                    {UPHOLSTERY_STYLES.map((u) => {
-                      const active = currentCustom.upholsteryId === u.id;
-                      return (
-                        <button
-                          key={u.id}
-                          onClick={() => patchCustom({ upholsteryId: u.id })}
-                          className={`w-full px-3 py-2 rounded-xl border text-left text-xs font-semibold flex items-center justify-between cursor-pointer ${
-                            active
-                              ? 'bg-sky-500/20 border-sky-400 text-white'
-                              : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
-                          }`}
-                        >
-                          <span className="flex items-center gap-2">
-                            <span
-                              className="w-3 h-3 rounded-full border border-white/30"
-                              style={{ backgroundColor: u.accent }}
-                            />
-                            {u.name}
-                          </span>
-                          {active && <Check className="w-3.5 h-3.5 text-sky-400" />}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Wheel Rim Style */}
-                <div>
-                  <label className="block text-[11px] font-bold uppercase tracking-wider text-neutral-400 mb-1.5">
-                    Wheel Alloy &amp; Hubcaps
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-1">
+                    Wheel Alloy Style
                   </label>
                   <div className="grid grid-cols-3 gap-1.5">
                     {WHEEL_STYLES.map((w) => {
@@ -347,57 +297,167 @@ export function GarageScreen({
                         <button
                           key={w.id}
                           onClick={() => patchCustom({ wheelStyleId: w.id })}
-                          className={`p-2 rounded-xl border text-[11px] font-bold flex flex-col items-center gap-1 cursor-pointer ${
+                          className={`py-1.5 rounded-xl border text-[10px] font-bold flex items-center justify-center gap-1 cursor-pointer ${
                             active
                               ? 'bg-amber-500/20 border-amber-400 text-amber-200'
                               : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
                           }`}
                         >
-                          <Disc className="w-4 h-4" />
+                          <Disc className="w-3.5 h-3.5" />
                           <span>{w.id.toUpperCase()}</span>
                         </button>
                       );
                     })}
                   </div>
                 </div>
-              </>
-            ) : (
+              </div>
+            )}
+
+            {rightTab === 'interior' && (
+              <div className="space-y-2.5">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-1">
+                    Cabin Upholstery
+                  </label>
+                  <div className="space-y-1">
+                    {UPHOLSTERY_STYLES.map((u) => {
+                      const active = currentCustom.upholsteryId === u.id;
+                      return (
+                        <button
+                          key={u.id}
+                          onClick={() => patchCustom({ upholsteryId: u.id })}
+                          className={`w-full px-2.5 py-1.5 rounded-xl border text-left text-[11px] font-semibold flex items-center justify-between cursor-pointer ${
+                            active
+                              ? 'bg-sky-500/20 border-sky-400 text-white'
+                              : 'bg-white/5 border-white/10 text-neutral-300 hover:bg-white/10'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2 truncate">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full border border-white/30 shrink-0"
+                              style={{ backgroundColor: u.accent }}
+                            />
+                            <span className="truncate">{u.name}</span>
+                          </span>
+                          {active && <Check className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Condition & Repair/Wash */}
+                <div className="p-2 rounded-xl bg-neutral-950/90 border border-white/10 space-y-1.5">
+                  <div className="grid grid-cols-2 gap-2 text-[10px] font-mono tabular-nums">
+                    <div>
+                      <div className="flex justify-between text-neutral-400 mb-0.5">
+                        <span>Health</span>
+                        <span className={progress.vehicleHealthPct < 45 ? 'text-red-400' : 'text-emerald-400'}>
+                          {Math.round(progress.vehicleHealthPct)}%
+                        </span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                        <div
+                          className={`h-full ${progress.vehicleHealthPct < 45 ? 'bg-red-500' : 'bg-emerald-400'}`}
+                          style={{ width: `${Math.max(0, Math.min(100, progress.vehicleHealthPct))}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-neutral-400 mb-0.5">
+                        <span>Dust</span>
+                        <span className={progress.dirtinessPct > 55 ? 'text-amber-400' : 'text-sky-300'}>
+                          {Math.round(progress.dirtinessPct)}%
+                        </span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
+                        <div
+                          className="h-full bg-amber-500"
+                          style={{ width: `${Math.max(0, Math.min(100, progress.dirtinessPct))}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      disabled={progress.vehicleHealthPct >= 99 || progress.money < 150}
+                      onClick={onRepairBus}
+                      className="min-h-[30px] py-1 px-2 rounded-lg text-[10px] font-bold bg-emerald-600/25 hover:bg-emerald-600/40 border border-emerald-400/40 text-emerald-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      Repair (-₹150)
+                    </button>
+                    <button
+                      disabled={progress.dirtinessPct <= 2 || progress.money < 80}
+                      onClick={onWashBus}
+                      className="min-h-[30px] py-1 px-2 rounded-lg text-[10px] font-bold bg-sky-600/25 hover:bg-sky-600/40 border border-sky-400/40 text-sky-200 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      Wash (-₹80)
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {rightTab === 'upgrades' && (
               <div className="space-y-2">
-                {UPGRADE_CATALOG.map((u) => {
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                    Workshop Parts
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      disabled={safePartsPage === 0}
+                      onClick={() => setPartsPage((p) => Math.max(0, p - 1))}
+                      className="min-h-[26px] min-w-[26px] rounded bg-white/10 hover:bg-white/20 disabled:opacity-35 flex items-center justify-center cursor-pointer"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-[10px] font-mono text-neutral-400 tabular-nums">
+                      {safePartsPage + 1}/{totalPartsPages}
+                    </span>
+                    <button
+                      disabled={safePartsPage >= totalPartsPages - 1}
+                      onClick={() => setPartsPage((p) => Math.min(totalPartsPages - 1, p + 1))}
+                      className="min-h-[26px] min-w-[26px] rounded bg-white/10 hover:bg-white/20 disabled:opacity-35 flex items-center justify-center cursor-pointer"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {visibleParts.map((u) => {
                   const owned = progress.ownedUpgrades.includes(u.id);
                   const equipped = progress.equippedUpgrades.includes(u.id);
                   return (
                     <div
                       key={u.id}
-                      className={`p-3 rounded-xl border ${
-                        equipped
-                          ? 'bg-emerald-500/15 border-emerald-400/50'
-                          : 'bg-white/5 border-white/10'
+                      className={`p-2.5 rounded-xl border ${
+                        equipped ? 'bg-emerald-500/15 border-emerald-400/50' : 'bg-white/5 border-white/10'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-white">{u.name}</span>
-                        <span className="text-[10px] font-mono text-amber-300">{u.statBoost}</span>
+                        <span className="text-xs font-bold text-white truncate">{u.name}</span>
+                        <span className="text-[10px] font-mono text-amber-300 shrink-0">{u.statBoost}</span>
                       </div>
-                      <p className="text-[11px] text-neutral-400 mt-1">{u.description}</p>
-                      <div className="mt-2">
+                      <p className="text-[10px] text-neutral-400 mt-0.5 line-clamp-1">{u.description}</p>
+                      <div className="mt-1.5">
                         {owned ? (
                           <button
                             onClick={() => onToggleUpgrade(u.id)}
-                            className={`w-full py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
+                            className={`w-full min-h-[28px] py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
                               equipped
                                 ? 'bg-emerald-600 text-white'
                                 : 'bg-white/10 hover:bg-white/20 text-neutral-200'
                             }`}
                           >
-                            {equipped ? 'Equipped (Click to Unequip)' : 'Equip Upgrade'}
+                            {equipped ? 'Equipped (Click to Remove)' : 'Equip Part'}
                           </button>
                         ) : (
                           <button
                             onClick={onOpenShop}
-                            className="w-full py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 text-amber-300 text-xs font-bold cursor-pointer"
+                            className="w-full min-h-[28px] py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/30 text-amber-300 text-[11px] font-bold cursor-pointer"
                           >
-                            Available in Shop (₹{u.price})
+                            Buy in Shop (₹{u.price})
                           </button>
                         )}
                       </div>
@@ -411,8 +471,8 @@ export function GarageScreen({
       </div>
 
       {/* Bottom Caption */}
-      <footer className="text-center pointer-events-none">
-        <span className="inline-block px-4 py-1.5 rounded-xl bg-neutral-900/80 border border-white/10 text-[11px] text-neutral-300">
+      <footer className="text-center pointer-events-none shrink-0">
+        <span className="inline-block px-3 py-1 rounded-xl bg-neutral-900/80 border border-white/10 text-[10px] sm:text-[11px] text-neutral-300">
           Live 3D Showcase · Changes apply immediately to your coach
         </span>
       </footer>
